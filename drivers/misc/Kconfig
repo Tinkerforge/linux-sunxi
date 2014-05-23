@@ -546,7 +546,16 @@ config WL127X_RFKILL
 	---help---
 	 Creates an rfkill entry in sysfs for power control of Bluetooth
 	 TI wl127x chips.
-	 
+
+config RED_BRICK_UID
+	tristate "Tinkerforge RED Brick UID (/proc/red_brick_uid)"
+	help
+	  Creates /proc/red_brick_uid to expose the RED Brick's UID to userland and
+	  provides functions to other kernel modules to access the UID.
+
+	  Say "y" to link the driver statically, or "m" to build a
+	  dynamically linked module called "red_brick_uid".
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"

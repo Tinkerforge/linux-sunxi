@@ -18,8 +18,6 @@
 #include <linux/device.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
-#include <linux/proc_fs.h>
-#include <plat/system.h>
 
 #include "u_serial.h"
 
@@ -196,67 +194,8 @@ static struct usb_composite_driver red_brick_driver = {
 	.unbind    = __exit_p(red_brick_unbind),
 };
 
-#define BASE58_MAX_STR_SIZE 8
-
-static const char BASE58_ALPHABET[] = \
-	"123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
-
-static void base58_encode(char *str, u32 value) {
-	u32 mod;
-	char reverse_str[BASE58_MAX_STR_SIZE] = {'\0'};
-	int i = 0;
-	int k = 0;
-
-	while (value >= 58) {
-		mod = value % 58;
-		reverse_str[i] = BASE58_ALPHABET[mod];
-		value = value / 58;
-		++i;
-	}
-
-	reverse_str[i] = BASE58_ALPHABET[value];
-
-	for (k = 0; k <= i; k++) {
-		str[k] = reverse_str[i - k];
-	}
-
-	for (; k < BASE58_MAX_STR_SIZE; k++) {
-		str[k] = '\0';
-	}
-}
-
-static char uid_str[BASE58_MAX_STR_SIZE] = "foobar";
-static u32 uid = 0;
-
-static int proc_uid_read(char *buffer, char **buffer_location,
-                         off_t offset, int buffer_length, int *eof, void *data)
-{
-	if (offset > 0) {
-		return 0;
-	}
-
-	if (uid == 0) {
-		struct sw_chip_id chip_id;
-
-		sw_get_chip_id(&chip_id);
-
-		uid = (chip_id.sid_rkey0 & 0x000000ff) << 24 | (chip_id.sid_rkey3 & 0x00ffffff);
-
-		base58_encode(uid_str, uid);
-	}
-
-	return snprintf(buffer, buffer_length, "%s\n", uid_str);
-}
-
 static int __init init(void)
 {
-	struct proc_dir_entry *proc_uid = create_proc_entry("red_brick_uid", S_IRUGO, NULL);
-
-	if (!proc_uid)
-		return -ENOMEM;
-
-	proc_uid->read_proc = proc_uid_read;
-
 	return usb_composite_probe(&red_brick_driver, red_brick_bind);
 }
 module_init(init);
@@ -264,7 +203,5 @@ module_init(init);
 static void __exit cleanup(void)
 {
 	usb_composite_unregister(&red_brick_driver);
-
-	remove_proc_entry("red_brick_uid", NULL);
 }
 module_exit(cleanup);

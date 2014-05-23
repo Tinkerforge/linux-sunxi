@@ -33,9 +33,6 @@
 #include <linux/usb.h>
 #include <linux/usb_usual.h>
 #include <linux/usb/ch9.h>
-#include <linux/usb/f_mtp.h>
-
-#include <plat/system.h>
 
 #define MTP_BULK_BUFFER_SIZE       80
 
@@ -305,34 +302,8 @@ static void f_brick_complete_in(struct usb_ep *ep, struct usb_request *req)
 	wake_up(&dev->write_wq);
 }
 
-#define _BASE58_MAX_STR_SIZE 8
-
-static const char _BASE58_ALPHABET[] = \
-	"123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
-
-static void _base58_encode(char *str, u32 value) {
-	u32 mod;
-	char reverse_str[_BASE58_MAX_STR_SIZE] = {'\0'};
-	int i = 0;
-	int k = 0;
-
-	while (value >= 58) {
-		mod = value % 58;
-		reverse_str[i] = _BASE58_ALPHABET[mod];
-		value = value / 58;
-		++i;
-	}
-
-	reverse_str[i] = _BASE58_ALPHABET[value];
-
-	for (k = 0; k <= i; k++) {
-		str[k] = reverse_str[i - k];
-	}
-
-	for (; k < _BASE58_MAX_STR_SIZE; k++) {
-		str[k] = '\0';
-	}
-}
+u32 red_brick_get_uid(void);
+const char *red_brick_get_uid_str(void);
 
 static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 {
@@ -340,9 +311,8 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 	int i, status;
 	struct usb_request *req2;
 	u8 *buf;
-	struct sw_chip_id chip_id;
 	u32 uid;
-	
+
 	printk("PPPHHH: f_brick_complete_out ep %p, req %p, dev %p\n", ep, req, dev);
 
 	dev->rx_done = 1;
@@ -370,10 +340,7 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 		return;
 	}
 
-	sw_get_chip_id(&chip_id);
-	printk("PPPHHH: chip_id %08x, %08x, %08x, %08x\n", chip_id.sid_rkey0, chip_id.sid_rkey1, chip_id.sid_rkey2, chip_id.sid_rkey3);
-
-	uid = (chip_id.sid_rkey0 & 0x000000ff) << 24 | (chip_id.sid_rkey3 & 0x00ffffff);
+	uid = red_brick_get_uid();
 	printk("PPPHHH: uid %08x\n", uid);
 
 	buf = req2->buf;
@@ -387,7 +354,7 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 	buf[7] = 0; 
 
 	buf[8] = 0; buf[9] = 0; buf[10] = 0; buf[11] = 0; buf[12] = 0; buf[13] = 0; buf[14] = 0; buf[15] = 0;  // uid
-	_base58_encode((char*)&buf[8], uid);
+	memcpy(&buf[8], red_brick_get_uid_str(), 8);
 
 	buf[16] = '0'; buf[17] = 0; buf[18] = 0; buf[19] = 0; buf[20] = 0; buf[21] = 0; buf[22] = 0; buf[23] = 0; // connected uid
 	buf[24] = '0'; // position

@@ -1007,8 +1007,10 @@ config USB_G_WEBCAM
 	  dynamically linked module called "g_webcam".
 
 config USB_G_RED_BRICK
-	tristate "Tinkerforge RED Brick Gadget"
+	tristate "Tinkerforge RED Brick USB Gadget"
 	help
+	  The RED Brick Gadget combines Brick API with a CDC-ACM serial port.
+
 	  Say "y" to link the driver statically, or "m" to build a
 	  dynamically linked module called "g_red_brick".
 

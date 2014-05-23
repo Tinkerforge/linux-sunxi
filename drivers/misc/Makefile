@@ -55,3 +55,4 @@ obj-$(CONFIG_SENSORS_AK8975)	+= akm8975.o
 obj-$(CONFIG_SUN4I_VIBRATOR)	+= sun4i-vibrator.o
 obj-$(CONFIG_SUNXI_DBGREG)		+= sunxi-dbgreg.o
 obj-$(CONFIG_SUNXI_PWM)		+= pwm-sunxi.o 
+obj-$(CONFIG_RED_BRICK_UID)		+= red_brick_uid.o
