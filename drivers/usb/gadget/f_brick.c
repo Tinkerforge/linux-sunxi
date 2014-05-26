@@ -34,10 +34,11 @@
 #include <linux/usb_usual.h>
 #include <linux/usb/ch9.h>
 
-#define MTP_BULK_BUFFER_SIZE       80
+#define BULK_BUFFER_SIZE       80
 
 /* String IDs */
-#define INTERFACE_STRING_INDEX	0
+#define STRING_INTERFACE_IDX	0
+#define STRING_MICROSOFT_OS_IDX 1
 
 /* values for mtp_dev.state */
 #define STATE_OFFLINE               0   /* initial state, disconnected */
@@ -49,19 +50,6 @@
 /* number of tx and rx requests to allocate */
 #define TX_REQ_MAX 5
 #define RX_REQ_MAX 5
-
-/* ID for Microsoft MTP OS String */
-#define MTP_OS_STRING_ID   0xEE
-
-/* MTP class reqeusts */
-#define MTP_REQ_CANCEL              0x64
-#define MTP_REQ_GET_EXT_EVENT_DATA  0x65
-#define MTP_REQ_RESET               0x66
-#define MTP_REQ_GET_DEVICE_STATUS   0x67
-
-/* constants for device status */
-#define MTP_RESPONSE_OK             0x2001
-#define MTP_RESPONSE_DEVICE_BUSY    0x2019
 
 struct f_brick_dev {
 	struct usb_function func;
@@ -157,7 +145,8 @@ static struct usb_descriptor_header *f_brick_hs_descs[] = {
 };
 
 static struct usb_string f_brick_string_defs[] = {
-	[INTERFACE_STRING_INDEX].s = "brick",
+	[STRING_INTERFACE_IDX].s     = "Brick API",
+	[STRING_MICROSOFT_OS_IDX].s  = "MSFT100*", /* <"MSFT100"> + <vendor code == 42 == '*'> */
 	{ }, /* end of list */
 };
 
@@ -171,49 +160,82 @@ static struct usb_gadget_strings *f_brick_strings[] = {
 	NULL,
 };
 
-/* Microsoft WinUSB OS String */
-static u8 winusb_os_string[] = {
-	18, /* sizeof(winusb_os_string) */
-	USB_DT_STRING,
-	'M', 0, 'S', 0, 'F', 0, 'T', 0, '1', 0, '0', 0, '0', 0, /* Signature field: "MSFT100" */
-	1, /* vendor code */
-	0, /* padding */
-};
-
-/* Microsoft Extended Configuration Descriptor Header Section */
-struct winusb_ext_config_desc_header {
+/* Microsoft Extended Compat ID Descriptor Header Section */
+struct ms_compat_id_desc_header {
 	__le32 dwLength;
-	__u16 bcdVersion;
+	__le16 bcdVersion;
 	__le16 wIndex;
 	__u8 bCount;
 	__u8 reserved[7];
-};
+} __attribute__((packed));
 
-/* Microsoft Extended Configuration Descriptor Function Section */
-struct winusb_ext_config_desc_function {
+/* Microsoft Extended Compat ID Descriptor Function Section */
+struct ms_compat_id_desc_function {
 	__u8 bFirstInterfaceNumber;
-	__u8 bInterfaceCount;
+	__u8 reserved1;
 	__u8 compatibleID[8];
 	__u8 subCompatibleID[8];
-	__u8 reserved[6];
-};
+	__u8 reserved2[6];
+} __attribute__((packed));
 
-/* MTP Extended Configuration Descriptor */
+/* Microsoft Extended Compat ID Descriptor */
 struct {
-	struct winusb_ext_config_desc_header header;
-	struct winusb_ext_config_desc_function function;
-} winusb_ext_config_desc = {
+	struct ms_compat_id_desc_header header;
+	struct ms_compat_id_desc_function function;
+} __attribute__((packed)) ms_compat_id_desc = {
 	.header = {
-		.dwLength   = __constant_cpu_to_le32(sizeof(winusb_ext_config_desc)),
-		.bcdVersion = __constant_cpu_to_le16(0x0100),
-		.wIndex     = __constant_cpu_to_le16(4),
-		.bCount     = __constant_cpu_to_le16(1),
+		.dwLength              = __constant_cpu_to_le32(sizeof(ms_compat_id_desc)),
+		.bcdVersion            = __constant_cpu_to_le16(0x0100),
+		.wIndex                = __constant_cpu_to_le16(4),
+		.bCount                = 1,
+		.reserved              = { 0, 0, 0, 0, 0, 0, 0 },
 	},
 	.function = {
 		.bFirstInterfaceNumber = 0,
-		.bInterfaceCount       = 1,
-		.compatibleID          = { 'W', 'I', 'N', 'U', 'S', 'B' },
+		.reserved1             = 1,
+		.compatibleID          = { 'W', 'I', 'N', 'U', 'S', 'B', 0, 0 },
+		.subCompatibleID       = { 0, 0, 0, 0, 0, 0, 0, 0 },
+		.reserved2             = { 0, 0, 0, 0, 0, 0 },
+	}
+};
+
+/* Microsoft Extended Properties Descriptor Header Section */
+struct ms_properties_desc_header {
+	__le32 dwLength;
+	__le16 bcdVersion;
+	__le16 wIndex;
+	__le16 bCount;
+} __attribute__((packed));
+
+/* Microsoft Extended Properties Descriptor Property Section */
+struct ms_properties_desc_property {
+	__le32 dwSize;
+	__le32 dwPropertyDataType;
+	__le16 wPropertyNameLength;
+	__u8 bPropertyName[42]; /* strlen("DeviceInterfaceGUIDs") * 2 + 2 */
+	__le32 dwPropertyDataLength;
+	__u8 bPropertyData[80]; /* strlen("{870013DD-FB1D-4BD7-A96C-1F0B7D31AF41}") * 2 + 4 */
+} __attribute__((packed));
+
+/* Microsoft Extended Properties Descriptor */
+struct {
+	struct ms_properties_desc_header header;
+	struct ms_properties_desc_property property;
+} __attribute__((packed)) ms_properties_desc = {
+	.header = {
+		.dwLength              = __constant_cpu_to_le32(sizeof(ms_properties_desc)),
+		.bcdVersion            = __constant_cpu_to_le16(0x0100),
+		.wIndex                = __constant_cpu_to_le16(5),
+		.bCount                = __constant_cpu_to_le16(1),
 	},
+	.property = {
+		.dwSize                = __constant_cpu_to_le32(sizeof(ms_properties_desc.property)),
+		.dwPropertyDataType    = __constant_cpu_to_le32(7), /* REG_MULTI_SZ */
+		.wPropertyNameLength   = __constant_cpu_to_le16(sizeof(ms_properties_desc.property.bPropertyName)),
+		.bPropertyName         = { 'D', 0, 'e', 0, 'v', 0, 'i', 0, 'c', 0, 'e', 0, 'I', 0, 'n', 0, 't', 0, 'e', 0, 'r', 0, 'f', 0, 'a', 0, 'c', 0, 'e', 0, 'G', 0, 'U', 0, 'I', 0, 'D', 0, 's', 0, 0, 0 },
+		.dwPropertyDataLength  = __constant_cpu_to_le32(sizeof(ms_properties_desc.property.bPropertyData)),
+		.bPropertyData         = { '{', 0, '8', 0, '7', 0, '0', 0, '0', 0, '1', 0, '3', 0, 'D', 0, 'D', 0, '-', 0, 'F', 0, 'B', 0, '1', 0, 'D', 0, '-', 0, '4', 0, 'B', 0, 'D', 0, '7', 0, '-', 0, 'A', 0, '9', 0, '6', 0, 'C', 0, '-', 0, '1', 0, 'F', 0, '0', 0, 'B', 0, '7', 0, 'D', 0, '3', 0, '1', 0, 'A', 0, 'F', 0, '4', 0, '1', 0, '}', 0, 0, 0, 0, 0 },
+	}
 };
 
 static inline struct f_brick_dev *f_brick_func_to_dev(struct usb_function *f)
@@ -313,18 +335,20 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 	u8 *buf;
 	u32 uid;
 
-	printk("PPPHHH: f_brick_complete_out ep %p, req %p, dev %p\n", ep, req, dev);
+	printk("PPPHHH: f_brick_complete_out ep %p, req %p, dev %p, status %d\n", ep, req, dev, req->status);
 
 	dev->rx_done = 1;
-	if (req->status != 0)
+	if (req->status != 0) {
 		dev->state = STATE_ERROR;
+		return;
+	}
 
 	printk("PPPHHH: f_brick_complete_out actual %d: ", req->actual);
-	
+
 	for (i = 0; i < req->actual; ++i) {
 		printk("%02x ", ((u8*)req->buf)[i]);
 	}
-	
+
 	printk("\n");
 
 	status = usb_ep_queue(dev->ep_out, req, GFP_ATOMIC);
@@ -350,8 +374,8 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 
 	buf[4] = 34; // length
 	buf[5] = 253; // fid
-	buf[6] = 1 << 3; 
-	buf[7] = 0; 
+	buf[6] = 1 << 3;
+	buf[7] = 0;
 
 	buf[8] = 0; buf[9] = 0; buf[10] = 0; buf[11] = 0; buf[12] = 0; buf[13] = 0; buf[14] = 0; buf[15] = 0;  // uid
 	memcpy(&buf[8], red_brick_get_uid_str(), 8);
@@ -365,7 +389,7 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 
 	req2->length = 34;
 	status = usb_ep_queue(dev->ep_in, req2, GFP_KERNEL);
-	if (status < 0) 
+	if (status < 0)
 		printk("PPPHHH: error2: %s queue req --> %d\n",
 				dev->ep_in->name, status);
 }
@@ -401,7 +425,7 @@ static int f_brick_create_bulk_endpoints(struct f_brick_dev *dev,
 
 	/* now allocate requests for our endpoints */
 	for (i = 0; i < TX_REQ_MAX; i++) {
-		req = f_brick_request_new(dev->ep_in, MTP_BULK_BUFFER_SIZE);
+		req = f_brick_request_new(dev->ep_in, BULK_BUFFER_SIZE);
 		if (!req)
 			goto fail;
 		req->complete = f_brick_complete_in;
@@ -409,7 +433,7 @@ static int f_brick_create_bulk_endpoints(struct f_brick_dev *dev,
 		f_brick_req_put(dev, &dev->tx_idle, req);
 	}
 	for (i = 0; i < RX_REQ_MAX; i++) {
-		req = f_brick_request_new(dev->ep_out, MTP_BULK_BUFFER_SIZE);
+		req = f_brick_request_new(dev->ep_out, BULK_BUFFER_SIZE);
 		if (!req)
 			goto fail;
 		req->complete = f_brick_complete_out;
@@ -426,85 +450,41 @@ fail:
 
 static int f_brick_func_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 {
-	/*struct f_brick_dev *dev = f_brick_func_to_dev(f);*/
 	struct usb_composite_dev *cdev = f->config->cdev;
 	int value = -EOPNOTSUPP;
 	u16 w_index = le16_to_cpu(ctrl->wIndex);
 	u16 w_value = le16_to_cpu(ctrl->wValue);
 	u16 w_length = le16_to_cpu(ctrl->wLength);
-//	unsigned long	flags;
 
 	printk("PPPHHH: f_brick_func_setup "
 			"%02x.%02x v%04x i%04x l%u\n",
 			ctrl->bRequestType, ctrl->bRequest,
 			w_value, w_index, w_length);
 
-	/* Handle MTP OS string */
-	if (ctrl->bRequestType ==
-			(USB_DIR_IN | USB_TYPE_STANDARD | USB_RECIP_DEVICE)
-			&& ctrl->bRequest == USB_REQ_GET_DESCRIPTOR
-			&& (w_value >> 8) == USB_DT_STRING
-			&& (w_value & 0xFF) == MTP_OS_STRING_ID) {
-		value = (w_length < sizeof(winusb_os_string)
-				? w_length : sizeof(winusb_os_string));
-		memcpy(cdev->req->buf, winusb_os_string, value);
-	} else if ((ctrl->bRequestType & USB_TYPE_MASK) == USB_TYPE_VENDOR) {
-		/* Handle MTP OS descriptor */
+	if ((ctrl->bRequestType & USB_TYPE_MASK) == USB_TYPE_VENDOR) {
 		printk("PPPHHH: vendor request: %d index: %d value: %d length: %d\n",
 			ctrl->bRequest, w_index, w_value, w_length);
 
-		if (ctrl->bRequest == 1
+		if (ctrl->bRequest == 42
 				&& (ctrl->bRequestType & USB_DIR_IN)
-				&& (w_index == 4 || w_index == 5)) {
-			value = (w_length < sizeof(winusb_ext_config_desc) ?
-					w_length : sizeof(winusb_ext_config_desc));
-			memcpy(cdev->req->buf, &winusb_ext_config_desc, value);
+				&& (w_index == 4)) {
+			value = (w_length < sizeof(ms_compat_id_desc) ?
+					w_length : sizeof(ms_compat_id_desc));
+			memcpy(cdev->req->buf, &ms_compat_id_desc, value);
+		printk("PPPHHH: vendor request A: %d index: %d value: %d length: %d ---> send %d bytes back\n",
+			ctrl->bRequest, w_index, w_value, w_length, value);
 		}
-	} 
-#if 0
-	else if ((ctrl->bRequestType & USB_TYPE_MASK) == USB_TYPE_CLASS) {
-		printk("PPPHHH: class request: %d index: %d value: %d length: %d\n",
-			ctrl->bRequest, w_index, w_value, w_length);
 
-		if (ctrl->bRequest == MTP_REQ_CANCEL && w_index == 0
-				&& w_value == 0) {
-			printk("PPPHHH: MTP_REQ_CANCEL\n");
-
-			spin_lock_irqsave(&dev->lock, flags);
-			if (dev->state == STATE_BUSY) {
-				dev->state = STATE_CANCELED;
-				wake_up(&dev->read_wq);
-				wake_up(&dev->write_wq);
-			}
-			spin_unlock_irqrestore(&dev->lock, flags);
-
-			/* We need to queue a request to read the remaining
-			 *  bytes, but we don't actually need to look at
-			 * the contents.
-			 */
-			value = w_length;
-		} else if (ctrl->bRequest == MTP_REQ_GET_DEVICE_STATUS
-				&& w_index == 0 && w_value == 0) {
-			struct mtp_device_status *status = cdev->req->buf;
-			status->wLength =
-				__constant_cpu_to_le16(sizeof(*status));
-
-			printk("PPPHHH: MTP_REQ_GET_DEVICE_STATUS\n");
-			spin_lock_irqsave(&dev->lock, flags);
-			/* device status is "busy" until we report
-			 * the cancelation to userspace
-			 */
-			if (dev->state == STATE_CANCELED)
-				status->wCode =
-					__cpu_to_le16(MTP_RESPONSE_DEVICE_BUSY);
-			else
-				status->wCode =
-					__cpu_to_le16(MTP_RESPONSE_OK);
-			spin_unlock_irqrestore(&dev->lock, flags);
-			value = sizeof(*status);
+		else if (ctrl->bRequest == 42
+				&& (ctrl->bRequestType & USB_DIR_IN)
+				&& (w_index == 5)) {
+			value = (w_length < sizeof(ms_properties_desc) ?
+					w_length : sizeof(ms_properties_desc));
+			memcpy(cdev->req->buf, &ms_properties_desc, value);
+		printk("PPPHHH: vendor request B: %d index: %d value: %d length: %d ---> send %d bytes back\n",
+			ctrl->bRequest, w_index, w_value, w_length, value);
 		}
 	}
-#endif
 
 	/* respond with data transfer or status phase? */
 	if (value >= 0) {
@@ -515,6 +495,7 @@ static int f_brick_func_setup(struct usb_function *f, const struct usb_ctrlreque
 		if (rc < 0)
 			printk("PPPHHH: %s: response queue error\n", __func__);
 	}
+
 	return value;
 }
 
@@ -543,7 +524,7 @@ static int f_brick_func_bind(struct usb_configuration *c, struct usb_function *f
 		f_brick_hs_in_desc.bEndpointAddress = f_brick_fs_in_desc.bEndpointAddress;
 		f_brick_hs_out_desc.bEndpointAddress = f_brick_fs_out_desc.bEndpointAddress;
 	}
-	
+
 	printk("PPPHHH: %s speed %s: IN/%s, OUT/%s\n",
 			gadget_is_dualspeed(c->cdev->gadget) ? "dual" : "full",
 			f->name, dev->ep_in->name, dev->ep_out->name);
@@ -602,17 +583,17 @@ static int f_brick_func_set_alt(struct usb_function *f, unsigned intf, unsigned 
 
 	/* readers may be blocked waiting for us to go online */
 	wake_up(&dev->read_wq);
-	
-	
-	
+
+
+
 	for (i = 0; i < RX_REQ_MAX; i++) {
 		status = usb_ep_queue(dev->ep_out, dev->rx_req[i], GFP_ATOMIC);
 		if (status)
 			printk("PPPHHH: usb_ep_queue -> error: %s queue req --> %d\n",
 					dev->ep_out->name, status);
 	}
-	
-	
+
+
 	printk("PPPHHH: f_brick_function_set_alt intf: %d alt: %d --> done\n", intf, alt);
 	return 0;
 }
@@ -638,12 +619,14 @@ static int f_brick_bind_config(struct usb_configuration *c)
 	struct f_brick_dev *dev;
 	int status;
 
-	if (f_brick_string_defs[INTERFACE_STRING_INDEX].id == 0) {
+	if (f_brick_string_defs[STRING_INTERFACE_IDX].id == 0) {
 		status = usb_string_id(c->cdev);
 		if (status < 0)
 			return status;
-		f_brick_string_defs[INTERFACE_STRING_INDEX].id = status;
+		f_brick_string_defs[STRING_INTERFACE_IDX].id = status;
 	}
+
+	f_brick_string_defs[STRING_MICROSOFT_OS_IDX].id = 0xEE;
 
 	/* allocate and initialize one new instance */
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);

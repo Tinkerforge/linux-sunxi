@@ -95,12 +95,6 @@ static const struct usb_descriptor_header *otg_desc[] = {
 
 /*-------------------------------------------------------------------------*/
 
-/* Module */
-MODULE_AUTHOR("Matthias Bolte");
-MODULE_LICENSE("GPL");
-
-/*-------------------------------------------------------------------------*/
-
 #define USE_ACM 1
 
 static int __init red_brick_bind_config(struct usb_configuration *c)
@@ -124,11 +118,25 @@ static int __init red_brick_bind_config(struct usb_configuration *c)
 	return 0;
 }
 
+static int red_brick_config_setup(struct usb_configuration *c,
+                                  const struct usb_ctrlrequest *ctrl)
+{
+	struct usb_function *f = NULL;
+
+	f = c->interface[0];
+
+	if (f && f->setup)
+		return f->setup(f, ctrl);
+
+	return -EOPNOTSUPP;
+}
+
 static struct usb_configuration red_brick_config = {
 	.label               = "foobar",
 	.bConfigurationValue = 1,
-	//.bmAttributes        = /*USB_CONFIG_ATT_ONE |*/ USB_CONFIG_ATT_SELFPOWER,
+	.bmAttributes        = USB_CONFIG_ATT_ONE,
 	.bMaxPower           = 250, /* 500mA */
+	.setup               = red_brick_config_setup,
 };
 
 static int __init red_brick_bind(struct usb_composite_dev *cdev)
@@ -208,3 +216,6 @@ static void __exit cleanup(void)
 	usb_composite_unregister(&red_brick_driver);
 }
 module_exit(cleanup);
+
+MODULE_AUTHOR("Matthias Bolte");
+MODULE_LICENSE("GPL");
