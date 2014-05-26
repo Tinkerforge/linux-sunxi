@@ -48,10 +48,12 @@
 #define STRING_PRODUCT_IDX 1
 #define STRING_SERIAL_NUMBER_IDX 2
 
+static char serial_number[8] = "";
+
 static struct usb_string strings_dev[] = {
 	[STRING_MANUFACTURER_IDX].s  = "Tinkerforge GmbH",
 	[STRING_PRODUCT_IDX].s       = "RED Brick",
-	[STRING_SERIAL_NUMBER_IDX].s = "500001000020000",
+	[STRING_SERIAL_NUMBER_IDX].s = serial_number,
 	{  } /* end of list */
 };
 
@@ -151,6 +153,7 @@ static int __init red_brick_bind(struct usb_composite_dev *cdev)
 	strings_dev[STRING_PRODUCT_IDX].id = status;
 	device_desc.iProduct = status;
 
+	snprintf(serial_number, sizeof(serial_number), "%s", red_brick_get_uid_str());
 	status = usb_string_id(cdev);
 	if (status < 0)
 		goto error;
