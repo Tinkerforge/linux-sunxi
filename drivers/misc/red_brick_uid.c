@@ -58,6 +58,12 @@ u32 red_brick_get_uid(void)
 		sw_get_chip_id(&chip_id);
 
 		uid = ((chip_id.sid_rkey0 & 0x000000ff) << 24) | (chip_id.sid_rkey3 & 0x00ffffff);
+
+		// avoid collisions with other Brick UIDs by clearing the 31th bit, as
+		// other Brick UIDs should have the 31th bit set always. avoid collisions
+		// with Bricklet UIDs by setting the 30th bit to get a high UID, as
+		// Bricklets have a low UID
+		uid = (uid & ~(1 << 31)) | (1 << 30);
 	}
 
 	return uid;
