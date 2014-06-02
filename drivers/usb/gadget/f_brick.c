@@ -245,16 +245,24 @@ static inline struct f_brick_dev *f_brick_func_to_dev(struct usb_function *f)
 
 static struct usb_request *f_brick_request_new(struct usb_ep *ep, int buffer_size)
 {
-	struct usb_request *req = usb_ep_alloc_request(ep, GFP_KERNEL);
-	if (!req)
-		return NULL;
+	struct usb_request *req;
 
-	/* now allocate buffers for the requests */
-	req->buf = kmalloc(buffer_size, GFP_KERNEL);
-	if (!req->buf) {
-		usb_ep_free_request(ep, req);
+	/* allocate request */
+	req = usb_ep_alloc_request(ep, GFP_KERNEL);
+
+	if (!req) {
 		return NULL;
 	}
+
+	/* allocate buffer for the request */
+	req->buf = kmalloc(buffer_size, GFP_KERNEL);
+
+	if (!req->buf) {
+		usb_ep_free_request(ep, req);
+
+		return NULL;
+	}
+
 	req->length = buffer_size;
 
 	return req;
@@ -502,8 +510,8 @@ static int f_brick_func_setup(struct usb_function *f, const struct usb_ctrlreque
 static int f_brick_func_bind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct f_brick_dev *dev = f_brick_func_to_dev(f);
-	int			id;
-	int			ret;
+	int id;
+	int ret;
 
 	dev->cdev = c->cdev;
 	printk("PPPHHH: f_brick_func_bind dev: %p\n", dev);

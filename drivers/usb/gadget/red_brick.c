@@ -21,8 +21,6 @@
 
 #include "u_serial.h"
 
-/*-------------------------------------------------------------------------*/
-
 /*
  * Kbuild is not very cooperative with respect to linking separately
  * compiled library objects into one module.  So for now we won't use
@@ -40,16 +38,13 @@
 #include "f_serial.c"
 #include "u_serial.c"
 
-/*-------------------------------------------------------------------------*/
-
-/* string IDs are assigned dynamically */
-
 #define STRING_MANUFACTURER_IDX 0
 #define STRING_PRODUCT_IDX 1
 #define STRING_SERIAL_NUMBER_IDX 2
 
 static char serial_number[8] = "";
 
+/* string IDs are assigned dynamically */
 static struct usb_string strings_dev[] = {
 	[STRING_MANUFACTURER_IDX].s  = "Tinkerforge GmbH",
 	[STRING_PRODUCT_IDX].s       = "RED Brick",
@@ -99,19 +94,23 @@ static const struct usb_descriptor_header *otg_desc[] = {
 
 static int __init red_brick_bind_config(struct usb_configuration *c)
 {
-	int status;
+	int ret;
 
-	status = f_brick_bind_config(c);
-	if (status < 0) {
+	ret = f_brick_bind_config(c);
+
+	if (ret < 0) {
 		printk(KERN_DEBUG "could not bind Brick config\n");
-		return status;
+
+		return ret;
 	}
 
 #if USE_ACM
-	status = acm_bind_config(c, 0);
-	if (status < 0) {
+	ret = acm_bind_config(c, 0);
+
+	if (ret < 0) {
 		printk(KERN_DEBUG "could not bind ACM config\n");
-		return status;
+
+		return ret;
 	}
 #endif
 
@@ -125,8 +124,9 @@ static int red_brick_config_setup(struct usb_configuration *c,
 
 	f = c->interface[0];
 
-	if (f && f->setup)
+	if (f && f->setup) {
 		return f->setup(f, ctrl);
+	}
 
 	return -EOPNOTSUPP;
 }
@@ -141,43 +141,63 @@ static struct usb_configuration red_brick_config = {
 
 static int __init red_brick_bind(struct usb_composite_dev *cdev)
 {
-	int status;
+	int ret;
 
+	/* setup serial */
 #if USE_ACM
-	status = gserial_setup(cdev->gadget, 1);
-	if (status < 0)
-		return status;
+	ret = gserial_setup(cdev->gadget, 1);
+
+	if (ret < 0) {
+		return ret;
+	}
 #endif
 
-	status = usb_string_id(cdev);
-	if (status < 0)
-		goto error;
-	strings_dev[STRING_MANUFACTURER_IDX].id = status;
-	device_desc.iManufacturer = status;
+	/* get manufacturer string descriptor ID */
+	ret = usb_string_id(cdev);
 
-	status = usb_string_id(cdev);
-	if (status < 0)
+	if (ret < 0) {
 		goto error;
-	strings_dev[STRING_PRODUCT_IDX].id = status;
-	device_desc.iProduct = status;
+	}
 
+	strings_dev[STRING_MANUFACTURER_IDX].id = ret;
+	device_desc.iManufacturer = ret;
+
+	/* get product string descriptor ID */
+	ret = usb_string_id(cdev);
+
+	if (ret < 0) {
+		goto error;
+	}
+
+	strings_dev[STRING_PRODUCT_IDX].id = ret;
+	device_desc.iProduct = ret;
+
+	/* set serial number from UID */
 	snprintf(serial_number, sizeof(serial_number), "%s", red_brick_get_uid_str());
-	status = usb_string_id(cdev);
-	if (status < 0)
-		goto error;
-	strings_dev[STRING_SERIAL_NUMBER_IDX].id = status;
-	device_desc.iSerialNumber = status;
 
+	/* get serial number string descriptor ID */
+	ret = usb_string_id(cdev);
+
+	if (ret < 0) {
+		goto error;
+	}
+
+	strings_dev[STRING_SERIAL_NUMBER_IDX].id = ret;
+	device_desc.iSerialNumber = ret;
+
+	/* configure OTG */
 	if (gadget_is_otg(cdev->gadget)) {
 		red_brick_config.descriptors = otg_desc;
 		red_brick_config.bmAttributes |= USB_CONFIG_ATT_WAKEUP;
 	}
 
-	status = usb_add_config(cdev, &red_brick_config, red_brick_bind_config);
-	if (status < 0)
-		goto error;
+	/* add USB config */
+	ret = usb_add_config(cdev, &red_brick_config, red_brick_bind_config);
 
-	pr_info("%s\n", "RED Brick Gadget");
+	if (ret < 0) {
+		goto error;
+	}
+
 	return 0;
 
 error:
@@ -185,7 +205,7 @@ error:
 	gserial_cleanup();
 #endif
 
-	return status;
+	return ret;
 }
 
 static int __exit red_brick_unbind(struct usb_composite_dev *cdev)
@@ -198,23 +218,24 @@ static int __exit red_brick_unbind(struct usb_composite_dev *cdev)
 }
 
 static struct usb_composite_driver red_brick_driver = {
-	.name      = "RED Brick Gadget",
+	.name      = "RED Brick",
 	.dev       = &device_desc,
 	.strings   = dev_strings,
 	.max_speed = USB_SPEED_SUPER,
 	.unbind    = __exit_p(red_brick_unbind),
 };
 
-static int __init init(void)
+static int __init setup(void)
 {
 	return usb_composite_probe(&red_brick_driver, red_brick_bind);
 }
-module_init(init);
 
 static void __exit cleanup(void)
 {
 	usb_composite_unregister(&red_brick_driver);
 }
+
+module_init(setup);
 module_exit(cleanup);
 
 MODULE_AUTHOR("Matthias Bolte");
