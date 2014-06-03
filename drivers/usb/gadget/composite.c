@@ -1135,15 +1135,12 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 				value = min(w_length, (u16) value);
 			break;
 		case USB_DT_STRING:
-			printk("FFF: composite_setup USB_REQ_GET_DESCRIPTOR USB_DT_STRING w_index 0x%04x, w_value[0..7] 0x%02x\n", w_index, w_value & 0xff);
 			if ((w_value & 0xff) == 0xee) // Force language to 0x0409 for "Microsoft OS String Descriptor"
 				value = get_string(cdev, req->buf, 0x0409, w_value & 0xff);
 			else
 				value = get_string(cdev, req->buf, w_index, w_value & 0xff);
-
 			if (value >= 0)
 				value = min(w_length, (u16) value);
-			printk("FFF: composite_setup USB_REQ_GET_DESCRIPTOR USB_DT_STRING w_index 0x%04x, w_value[0..7] 0x%02x ----> value %d\n", w_index, w_value & 0xff, value);
 			break;
 		case USB_DT_BOS:
 			if (gadget_is_superspeed(gadget)) {
