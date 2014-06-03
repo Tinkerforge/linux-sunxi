@@ -152,7 +152,7 @@ static int __init red_brick_bind(struct usb_composite_dev *cdev)
 	}
 #endif
 
-	/* get manufacturer string descriptor ID */
+	/* allocate manufacturer string descriptor ID */
 	ret = usb_string_id(cdev);
 
 	if (ret < 0) {
@@ -162,7 +162,7 @@ static int __init red_brick_bind(struct usb_composite_dev *cdev)
 	strings_dev[STRING_MANUFACTURER_IDX].id = ret;
 	device_desc.iManufacturer = ret;
 
-	/* get product string descriptor ID */
+	/* allocate product string descriptor ID */
 	ret = usb_string_id(cdev);
 
 	if (ret < 0) {
@@ -175,7 +175,7 @@ static int __init red_brick_bind(struct usb_composite_dev *cdev)
 	/* set serial number from UID */
 	snprintf(serial_number, sizeof(serial_number), "%s", red_brick_get_uid_str());
 
-	/* get serial number string descriptor ID */
+	/* allocate serial number string descriptor ID */
 	ret = usb_string_id(cdev);
 
 	if (ret < 0) {
@@ -227,12 +227,29 @@ static struct usb_composite_driver red_brick_driver = {
 
 static int __init setup(void)
 {
-	return usb_composite_probe(&red_brick_driver, red_brick_bind);
+	int ret;
+
+	ret = f_brick_setup();
+
+	if (ret < 0) {
+		return ret;
+	}
+
+	ret = usb_composite_probe(&red_brick_driver, red_brick_bind);
+
+	if (ret < 0) {
+		f_brick_cleanup();
+
+		return ret;
+	}
+
+	return 0;
 }
 
 static void __exit cleanup(void)
 {
 	usb_composite_unregister(&red_brick_driver);
+	f_brick_cleanup();
 }
 
 module_init(setup);
