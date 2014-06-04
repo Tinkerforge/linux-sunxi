@@ -34,11 +34,10 @@
 #include <linux/usb_usual.h>
 #include <linux/usb/ch9.h>
 
-#define BULK_BUFFER_SIZE       80
+#define F_BRICK_BULK_BUFFER_SIZE 80
 
-/* String IDs */
-#define STRING_INTERFACE_IDX	0
-#define STRING_MICROSOFT_OS_IDX 1
+#define F_BRICK_STRING_INTERFACE_IDX 0
+#define F_BRICK_STRING_MICROSOFT_OS_IDX 1
 
 /* values for mtp_dev.state */
 #define STATE_OFFLINE               0   /* initial state, disconnected */
@@ -74,7 +73,7 @@ struct f_brick_ctx {
 
 	int is_open; /* /dev/g_red_brick */
 
-	spinlock_t reqs_lock;
+	spinlock_t lock;
 	struct mutex fops_lock;
 
 	/* buffer to accumulate a packet to be send to the host. a single USB
@@ -110,7 +109,12 @@ struct f_brick_ctx {
 	struct list_head rx_reqs_active;
 	struct list_head rx_reqs_complete;
 
+	/* indcates that data can be written by brickd. this means that the state
+	 * is connected and that tx_reqs_idle is not empty */
 	wait_queue_head_t tx_wait;
+
+	/* inidcate that data can be read by brickd. this means that either
+	 * rx_partial_buf_len is not zero or that rx_reqs_complete is not empty */
 	wait_queue_head_t rx_wait;
 };
 
@@ -173,8 +177,8 @@ static struct usb_descriptor_header *f_brick_hs_descs[] = {
 };
 
 static struct usb_string f_brick_string_defs[] = {
-	[STRING_INTERFACE_IDX].s     = "Brick API",
-	[STRING_MICROSOFT_OS_IDX].s  = "MSFT100*", /* <"MSFT100"> + <vendor code == 42 == '*'> */
+	[F_BRICK_STRING_INTERFACE_IDX].s     = "Brick API",
+	[F_BRICK_STRING_MICROSOFT_OS_IDX].s  = "MSFT100*", /* <"MSFT100"> + <vendor code == 42 == '*'> */
 	{ }, /* end of list */
 };
 
@@ -266,7 +270,7 @@ struct {
 	}
 };
 
-static struct usb_request *f_brick_request_new(struct usb_ep *ep, int buffer_size)
+static struct usb_request *f_brick_request_new(struct usb_ep *ep, int buf_len)
 {
 	struct usb_request *req;
 
@@ -278,7 +282,7 @@ static struct usb_request *f_brick_request_new(struct usb_ep *ep, int buffer_siz
 	}
 
 	/* allocate buffer for the request */
-	req->buf = kmalloc(buffer_size, GFP_KERNEL);
+	req->buf = kmalloc(buf_len, GFP_KERNEL);
 
 	if (!req->buf) {
 		usb_ep_free_request(ep, req);
@@ -286,7 +290,7 @@ static struct usb_request *f_brick_request_new(struct usb_ep *ep, int buffer_siz
 		return NULL;
 	}
 
-	req->length = buffer_size;
+	req->length = buf_len;
 
 	return req;
 }
@@ -306,14 +310,14 @@ static void f_brick_complete_in(struct usb_ep *ep, struct usb_request *req)
 
 	printk(">>>>>>>>>>>>>>>>>> enter f_brick_complete_in\n");
 
-	spin_lock_irqsave(&ctx->reqs_lock, flags);
+	spin_lock_irqsave(&ctx->lock, flags);
 
 	list_del_init(&req->list); /* remove from tx_reqs_active */
 	list_add(&req->list, &ctx->tx_reqs_idle);
 
 	wake_up(&ctx->rx_wait);
 
-	spin_unlock_irqrestore(&ctx->reqs_lock, flags);
+	spin_unlock_irqrestore(&ctx->lock, flags);
 }
 
 const char *red_brick_get_uid_str(void);
@@ -326,7 +330,7 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 
 	printk(">>>>>>>>>>>>>>>>>> enter f_brick_complete_out\n");
 
-	spin_lock_irqsave(&ctx->reqs_lock, flags);
+	spin_lock_irqsave(&ctx->lock, flags);
 
 	list_del_init(&req->list); /* remove from rx_reqs_active */
 
@@ -346,17 +350,17 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 		}
 	}
 
-	spin_unlock_irqrestore(&ctx->reqs_lock, flags);
+	spin_unlock_irqrestore(&ctx->lock, flags);
 }
 
-/* NOTE: assumes reqs_lock is locked */
-static void f_brick_queue_rx_idle(void)
+/* NOTE: assumes ctx->lock is locked */
+static void f_brick_enqueue_rx_idle(void)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	struct usb_request *req;
 	int ret;
 
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_queue_rx_idle\n");
+	printk(">>>>>>>>>>>>>>>>>> enter f_brick_enqueue_rx_idle\n");
 
 	while (!list_empty(&ctx->rx_reqs_idle)) {
 		req = list_first_entry(&ctx->rx_reqs_idle, struct usb_request, list);
@@ -365,7 +369,7 @@ static void f_brick_queue_rx_idle(void)
 		ret = usb_ep_queue(ctx->ep_out, req, GFP_ATOMIC);
 
 		if (ret < 0) {
-			printk("PPPHHH: f_brick_queue_rx_idle rx submit --> %d\n", ret);
+			printk("PPPHHH: f_brick_enqueue_rx_idle rx submit --> %d\n", ret);
 
 			list_add_tail(&req->list, &ctx->rx_reqs_idle);
 
@@ -435,7 +439,6 @@ static int f_brick_func_bind(struct usb_configuration *c, struct usb_function *f
 	struct usb_composite_dev *cdev = ctx->cdev;
 	int ret;
 	struct usb_request *req;
-	struct usb_ep *ep;
 	int i;
 
 	printk(">>>>>>>>>>>>>>>>>> enter f_brick_func_bind\n");
@@ -452,28 +455,26 @@ static int f_brick_func_bind(struct usb_configuration *c, struct usb_function *f
 	f_brick_interface_desc.bInterfaceNumber = ret;
 
 	/* allocate in endpoint */
-	ep = usb_ep_autoconfig(cdev->gadget, &f_brick_fs_in_desc);
+	ctx->ep_in = usb_ep_autoconfig(cdev->gadget, &f_brick_fs_in_desc);
 
-	if (!ep) {
+	if (!ctx->ep_in) {
 		return -ENODEV;
 	}
 
-	ep->driver_data = ctx; /* claim the endpoint */
-	ctx->ep_in = ep;
+	ctx->ep_in->driver_data = ctx; /* claim the endpoint */
 
 	/* allocate out endpoint */
-	ep = usb_ep_autoconfig(cdev->gadget, &f_brick_fs_out_desc);
+	ctx->ep_out = usb_ep_autoconfig(cdev->gadget, &f_brick_fs_out_desc);
 
-	if (!ep) {
+	if (!ctx->ep_out) {
 		return -ENODEV;
 	}
 
-	ep->driver_data = ctx; /* claim the endpoint */
-	ctx->ep_out = ep;
+	ctx->ep_out->driver_data = ctx; /* claim the endpoint */
 
 	/* allocate requests */
 	for (i = 0; i < F_BRICK_TX_REQ_COUNT; i++) {
-		req = f_brick_request_new(ctx->ep_in, BULK_BUFFER_SIZE);
+		req = f_brick_request_new(ctx->ep_in, F_BRICK_BULK_BUFFER_SIZE);
 
 		if (!req) {
 			return -ENOMEM;
@@ -485,7 +486,7 @@ static int f_brick_func_bind(struct usb_configuration *c, struct usb_function *f
 	}
 
 	for (i = 0; i < F_BRICK_RX_REQ_COUNT; i++) {
-		req = f_brick_request_new(ctx->ep_out, BULK_BUFFER_SIZE);
+		req = f_brick_request_new(ctx->ep_out, F_BRICK_BULK_BUFFER_SIZE);
 
 		if (!req) {
 			return -ENOMEM;
@@ -562,6 +563,7 @@ static int f_brick_func_set_alt(struct usb_function *f, unsigned intf, unsigned 
 		return ret;
 	}
 
+	spin_lock_irqsave(&ctx->lock, flags);
 	//ctx->state = STATE_READY;
 
 	/* readers may be blocked waiting for us to go online */
@@ -580,7 +582,6 @@ static int f_brick_func_set_alt(struct usb_function *f, unsigned intf, unsigned 
 	//	f_brick_request_free(req, ctx->ep_in);
 
 
-	spin_lock_irqsave(&ctx->reqs_lock, flags);
 
 	// FIXME: move all request from rx_reqs_complete back to rx_reqs_idle
 
@@ -600,9 +601,9 @@ static int f_brick_func_set_alt(struct usb_function *f, unsigned intf, unsigned 
 	ctx->tx_partial_buf = NULL;
 	ctx->tx_partial_buf_len = 0;
 
-	f_brick_queue_rx_idle();
+	f_brick_enqueue_rx_idle();
 
-	spin_unlock_irqrestore(&ctx->reqs_lock, flags);
+	spin_unlock_irqrestore(&ctx->lock, flags);
 
 	return 0;
 }
@@ -627,17 +628,17 @@ static int f_brick_bind_config(struct usb_configuration *c)
 
 	printk(">>>>>>>>>>>>>>>>>> enter f_brick_bind_config\n");
 
-	if (f_brick_string_defs[STRING_INTERFACE_IDX].id == 0) {
+	if (f_brick_string_defs[F_BRICK_STRING_INTERFACE_IDX].id == 0) {
 		ret = usb_string_id(c->cdev);
 
 		if (ret < 0) {
 			return ret;
 		}
 
-		f_brick_string_defs[STRING_INTERFACE_IDX].id = ret;
+		f_brick_string_defs[F_BRICK_STRING_INTERFACE_IDX].id = ret;
 	}
 
-	f_brick_string_defs[STRING_MICROSOFT_OS_IDX].id = 0xEE;
+	f_brick_string_defs[F_BRICK_STRING_MICROSOFT_OS_IDX].id = 0xEE;
 
 	ctx->cdev                = c->cdev;
 	ctx->func.name           = "brick";
@@ -700,13 +701,13 @@ static ssize_t f_brick_fop_read(struct file *fp, char __user *buf,
 	}
 
 	mutex_lock(&ctx->fops_lock);
-	spin_lock_irqsave(&ctx->reqs_lock, flags);
+	spin_lock_irqsave(&ctx->lock, flags);
 
 	// FIXME: try to submit all idle RX requests if any
 
 	/* if no (partial) complete RX request is available then wait for one */
 	if (!ctx->rx_partial_req && list_empty(&ctx->rx_reqs_complete)) {
-		spin_unlock_irqrestore(&ctx->reqs_lock, flags);
+		spin_unlock_irqrestore(&ctx->lock, flags);
 
 		if (fp->f_flags & (O_NONBLOCK | O_NDELAY)) {
 			mutex_unlock(&ctx->fops_lock);
@@ -721,7 +722,7 @@ static ssize_t f_brick_fop_read(struct file *fp, char __user *buf,
 			return -ERESTARTSYS;
 		}
 
-		spin_lock_irqsave(&ctx->reqs_lock, flags);
+		spin_lock_irqsave(&ctx->lock, flags);
 	}
 
 	/* copy available data to the user buffer */
@@ -741,12 +742,12 @@ static ssize_t f_brick_fop_read(struct file *fp, char __user *buf,
 			copy_len = buf_len;
 		}
 
-		spin_unlock_irqrestore(&ctx->reqs_lock, flags);
+		spin_unlock_irqrestore(&ctx->lock, flags);
 
 		// FIXME: if copy_len gets 0 then this can become and endless loop
 		copy_len -= copy_to_user(buf, ctx->rx_partial_buf, copy_len);
 
-		spin_lock_irqsave(&ctx->reqs_lock, flags);
+		spin_lock_irqsave(&ctx->lock, flags);
 
 		buf += copy_len;
 		buf_len -= copy_len;
@@ -770,7 +771,7 @@ static ssize_t f_brick_fop_read(struct file *fp, char __user *buf,
 		}
 	}
 
-	spin_unlock_irqrestore(&ctx->reqs_lock, flags);
+	spin_unlock_irqrestore(&ctx->lock, flags);
 	mutex_unlock(&ctx->fops_lock);
 
 	if (total_len == 0) {
@@ -802,11 +803,11 @@ static ssize_t f_brick_fop_write(struct file *fp, const char __user *buf,
 	}
 
 	mutex_lock(&ctx->fops_lock);
-	spin_lock_irqsave(&ctx->reqs_lock, flags);
+	spin_lock_irqsave(&ctx->lock, flags);
 
 	/* if no TX requests are avialable wait for some */
 	if (list_empty(&ctx->tx_reqs_idle)) {
-		spin_unlock_irqrestore(&ctx->reqs_lock, flags);
+		spin_unlock_irqrestore(&ctx->lock, flags);
 
 		if (fp->f_flags & (O_NONBLOCK | O_NDELAY)) {
 			mutex_unlock(&ctx->fops_lock);
@@ -820,7 +821,7 @@ static ssize_t f_brick_fop_write(struct file *fp, const char __user *buf,
 			return -ERESTARTSYS;
 		}
 
-		spin_lock_irqsave(&ctx->reqs_lock, flags);
+		spin_lock_irqsave(&ctx->lock, flags);
 	}
 
 	/* copy avialable data from the user buffer */
@@ -852,12 +853,12 @@ static ssize_t f_brick_fop_write(struct file *fp, const char __user *buf,
 			copy_len = buf_len;
 		}
 
-		spin_unlock_irqrestore(&ctx->reqs_lock, flags);
+		spin_unlock_irqrestore(&ctx->lock, flags);
 
-		// FIXME: if copy_len gets 0 then this can become and endless loop
+		// FIXME: if copy_len gets 0 then this can become an endless loop
 		copy_len -= copy_from_user(ctx->tx_partial_buf + ctx->tx_partial_buf_len, buf, copy_len);
 
-		spin_lock_irqsave(&ctx->reqs_lock, flags);
+		spin_lock_irqsave(&ctx->lock, flags);
 
 		buf += copy_len;
 		buf_len -= copy_len;
@@ -885,7 +886,7 @@ static ssize_t f_brick_fop_write(struct file *fp, const char __user *buf,
 		}
 	}
 
-	spin_unlock_irqrestore(&ctx->reqs_lock, flags);
+	spin_unlock_irqrestore(&ctx->lock, flags);
 	mutex_unlock(&ctx->fops_lock);
 
 	if (total_len == 0) {
@@ -913,7 +914,7 @@ static unsigned int f_brick_fop_poll(struct file *fp, poll_table *wait)
 	poll_wait(fp, &ctx->rx_wait, wait);
 
 	// FIXME: need to hold fops_lock here because of rx_partial_buf_len
-	spin_lock_irqsave(&ctx->reqs_lock, flags);
+	spin_lock_irqsave(&ctx->lock, flags);
 
 	if (!list_empty(&ctx->tx_reqs_idle)) {
 		status |= POLLOUT | POLLWRNORM;
@@ -923,7 +924,7 @@ static unsigned int f_brick_fop_poll(struct file *fp, poll_table *wait)
 		status |= POLLIN | POLLRDNORM;
 	}
 
-	spin_unlock_irqrestore(&ctx->reqs_lock, flags);
+	spin_unlock_irqrestore(&ctx->lock, flags);
 
 	return status;
 }
@@ -957,9 +958,12 @@ static int f_brick_setup(void)
 		return -ENOMEM;
 	}
 
+	ctx->ep_in = NULL;
+	ctx->ep_out = NULL;
+
 	ctx->is_open = 0;
 
-	spin_lock_init(&ctx->reqs_lock);
+	spin_lock_init(&ctx->lock);
 	mutex_init(&ctx->fops_lock);
 
 	ctx->tx_partial_req = NULL;
