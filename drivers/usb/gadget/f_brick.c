@@ -24,12 +24,11 @@
 #include <linux/wait.h>
 #include <linux/err.h>
 #include <linux/interrupt.h>
-
 #include <linux/types.h>
 #include <linux/file.h>
 #include <linux/device.h>
 #include <linux/miscdevice.h>
-
+#include <linux/proc_fs.h>
 #include <linux/usb.h>
 #include <linux/usb_usual.h>
 #include <linux/usb/ch9.h>
@@ -39,14 +38,9 @@
 #define F_BRICK_STRING_INTERFACE_IDX 0
 #define F_BRICK_STRING_MICROSOFT_OS_IDX 1
 
-/* values for mtp_dev.state */
-#define STATE_OFFLINE               0   /* initial state, disconnected */
-#define STATE_READY                 1   /* ready for userspace calls */
-#define STATE_BUSY                  2   /* processing userspace calls */
-#define STATE_CANCELED              3   /* transaction canceled by host */
-#define STATE_ERROR                 4   /* error from completion routine */
+#define F_BRICK_STATE_DISCONNECTED 0
+#define F_BRICK_STATE_CONNECTED 1
 
-/* number of TX and RX requests to allocate */
 #define F_BRICK_TX_REQ_COUNT 5
 #define F_BRICK_RX_REQ_COUNT 5
 
@@ -64,14 +58,17 @@ struct f_brick_packet {
 	u8 optional_data[8];
 } __attribute__((packed));
 
-
 struct f_brick_ctx {
 	struct usb_composite_dev *cdev;
 	struct usb_function func;
 	struct usb_ep *ep_in;
 	struct usb_ep *ep_out;
 
-	int is_open; /* /dev/g_red_brick */
+	u8 state;
+	u8 state_changed;
+	wait_queue_head_t state_wait;
+
+	u8 is_open; /* /dev/g_red_brick */
 
 	spinlock_t lock;
 	struct mutex fops_lock;
@@ -270,6 +267,23 @@ struct {
 	}
 };
 
+/* NOTE: assumes ctx->lock is locked */
+static void f_brick_set_state(u8 state)
+{
+	struct f_brick_ctx *ctx = _f_brick_ctx;
+
+	if (ctx->state != state) {
+		ctx->state = state;
+		ctx->state_changed = 1;
+
+		if (ctx->state == F_BRICK_STATE_CONNECTED && !list_empty(&ctx->tx_reqs_idle)) {
+			wake_up(&ctx->tx_wait);
+		}
+
+		wake_up(&ctx->state_wait);
+	}
+}
+
 static struct usb_request *f_brick_request_new(struct usb_ep *ep, int buf_len)
 {
 	struct usb_request *req;
@@ -315,7 +329,9 @@ static void f_brick_complete_in(struct usb_ep *ep, struct usb_request *req)
 	list_del_init(&req->list); /* remove from tx_reqs_active */
 	list_add_tail(&req->list, &ctx->tx_reqs_idle);
 
-	wake_up(&ctx->rx_wait);
+	if (ctx->state == F_BRICK_STATE_CONNECTED) {
+		wake_up(&ctx->tx_wait);
+	}
 
 	spin_unlock_irqrestore(&ctx->lock, flags);
 }
@@ -339,7 +355,7 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 		list_add_tail(&req->list, &ctx->rx_reqs_complete);
 
 		wake_up(&ctx->rx_wait);
-	} else {
+	} else if (ctx->state == F_BRICK_STATE_CONNECTED) {
 		/* connected, try to enqueue RX request again */
 		ret = usb_ep_queue(ctx->ep_out, req, GFP_ATOMIC);
 
@@ -350,6 +366,9 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 		} else {
 			list_add_tail(&req->list, &ctx->rx_reqs_active);
 		}
+	} else {
+		/* not connected, move RX request to idle */
+		list_add_tail(&req->list, &ctx->rx_reqs_idle);
 	}
 
 	spin_unlock_irqrestore(&ctx->lock, flags);
@@ -643,6 +662,9 @@ static int f_brick_func_set_alt(struct usb_function *f, unsigned intf, unsigned 
 	/* enqueue RX requests */
 	f_brick_enqueue_rx_idle();
 
+	/* wake waiting writer */
+	f_brick_set_state(F_BRICK_STATE_CONNECTED);
+
 	spin_unlock_irqrestore(&ctx->lock, flags);
 
 	return 0;
@@ -656,6 +678,8 @@ static void f_brick_func_disable(struct usb_function *f)
 	printk(">>>>>>>>>>>>>>>>>> enter f_brick_func_disable\n");
 
 	spin_lock_irqsave(&ctx->lock, flags);
+
+	f_brick_set_state(F_BRICK_STATE_DISCONNECTED);
 
 	f_brick_disable_endpoint(ctx->ep_in);
 	f_brick_disable_endpoint(ctx->ep_out);
@@ -699,11 +723,11 @@ static int f_brick_bind_config(struct usb_configuration *c)
 	return usb_add_function(c, &ctx->func);
 }
 
-static int f_brick_fop_open(struct inode *ip, struct file *fp)
+static int f_brick_data_fop_open(struct inode *ip, struct file *fp)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_fop_open\n");
+	printk(">>>>>>>>>>>>>>>>>> enter f_brick_data_fop_open\n");
 
 	if (ctx->is_open) {
 		return -EBUSY;
@@ -714,19 +738,19 @@ static int f_brick_fop_open(struct inode *ip, struct file *fp)
 	return 0;
 }
 
-static int f_brick_fop_release(struct inode *ip, struct file *fp)
+static int f_brick_data_fop_release(struct inode *ip, struct file *fp)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_fop_release\n");
+	printk(">>>>>>>>>>>>>>>>>> enter f_brick_data_fop_release\n");
 
 	ctx->is_open = 0;
 
 	return 0;
 }
 
-static ssize_t f_brick_fop_read(struct file *fp, char __user *buf,
-                                size_t buf_len, loff_t *pos)
+static ssize_t f_brick_data_fop_read(struct file *fp, char __user *buf,
+                                     size_t buf_len, loff_t *pos)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	unsigned long flags;
@@ -735,7 +759,7 @@ static ssize_t f_brick_fop_read(struct file *fp, char __user *buf,
 	size_t total_len = 0;
 	int ret;
 
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_fop_read\n");
+	printk(">>>>>>>>>>>>>>>>>> enter f_brick_data_fop_read\n");
 
 	if (buf_len == 0) {
 		return 0;
@@ -826,8 +850,8 @@ static ssize_t f_brick_fop_read(struct file *fp, char __user *buf,
 	return total_len;
 }
 
-static ssize_t f_brick_fop_write(struct file *fp, const char __user *buf,
-                                 size_t buf_len, loff_t *pos)
+static ssize_t f_brick_data_fop_write(struct file *fp, const char __user *buf,
+                                      size_t buf_len, loff_t *pos)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	unsigned long flags;
@@ -837,7 +861,7 @@ static ssize_t f_brick_fop_write(struct file *fp, const char __user *buf,
 	size_t total_len = 0;
 	int ret;
 
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_fop_write\n");
+	printk(">>>>>>>>>>>>>>>>>> enter f_brick_data_fop_write\n");
 
 	if (buf_len == 0) {
 		return 0;
@@ -850,8 +874,8 @@ static ssize_t f_brick_fop_write(struct file *fp, const char __user *buf,
 	mutex_lock(&ctx->fops_lock);
 	spin_lock_irqsave(&ctx->lock, flags);
 
-	/* if no TX requests are avialable wait for some */
-	if (list_empty(&ctx->tx_reqs_idle)) {
+	/* if no TX requests are available wait for some */
+	if (ctx->state != F_BRICK_STATE_CONNECTED || list_empty(&ctx->tx_reqs_idle)) {
 		spin_unlock_irqrestore(&ctx->lock, flags);
 
 		if (fp->f_flags & (O_NONBLOCK | O_NDELAY)) {
@@ -860,7 +884,7 @@ static ssize_t f_brick_fop_write(struct file *fp, const char __user *buf,
 			return -EAGAIN;
 		}
 
-		if (wait_event_interruptible(ctx->tx_wait, !list_empty(&ctx->tx_reqs_idle)) < 0) {
+		if (wait_event_interruptible(ctx->tx_wait, ctx->state == F_BRICK_STATE_CONNECTED && !list_empty(&ctx->tx_reqs_idle)) < 0) {
 			mutex_unlock(&ctx->fops_lock);
 
 			return -ERESTARTSYS;
@@ -869,8 +893,8 @@ static ssize_t f_brick_fop_write(struct file *fp, const char __user *buf,
 		spin_lock_irqsave(&ctx->lock, flags);
 	}
 
-	/* copy avialable data from the user buffer */
-	while (buf_len > 0 && (ctx->tx_partial_req || !list_empty(&ctx->tx_reqs_idle))) {
+	/* copy available data from the user buffer */
+	while (buf_len > 0 && ctx->state == F_BRICK_STATE_CONNECTED && (ctx->tx_partial_req || !list_empty(&ctx->tx_reqs_idle))) {
 		if (!ctx->tx_partial_req) {
 			req = list_first_entry(&ctx->tx_reqs_idle, struct usb_request, list);
 			list_del_init(&req->list);
@@ -941,13 +965,13 @@ static ssize_t f_brick_fop_write(struct file *fp, const char __user *buf,
 	return total_len;
 }
 
-static unsigned int f_brick_fop_poll(struct file *fp, poll_table *wait)
+static unsigned int f_brick_data_fop_poll(struct file *fp, poll_table *wait)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	unsigned long flags;
 	unsigned int status = 0;
 
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_fop_poll\n");
+	printk(">>>>>>>>>>>>>>>>>> enter f_brick_data_fop_poll\n");
 
 	/*mutex_lock(&dev->lock_printer_io);
 	spin_lock_irqsave(&dev->lock, flags);
@@ -961,7 +985,7 @@ static unsigned int f_brick_fop_poll(struct file *fp, poll_table *wait)
 	// FIXME: need to hold fops_lock here because of rx_partial_buf_len
 	spin_lock_irqsave(&ctx->lock, flags);
 
-	if (!list_empty(&ctx->tx_reqs_idle)) {
+	if (ctx->state == F_BRICK_STATE_CONNECTED && !list_empty(&ctx->tx_reqs_idle)) {
 		status |= POLLOUT | POLLWRNORM;
 	}
 
@@ -974,19 +998,134 @@ static unsigned int f_brick_fop_poll(struct file *fp, poll_table *wait)
 	return status;
 }
 
-static const struct file_operations f_brick_fops = {
+static const struct file_operations f_brick_data_fops = {
 	.owner   = THIS_MODULE,
-	.open    = f_brick_fop_open,
-	.release = f_brick_fop_release,
-	.read    = f_brick_fop_read,
-	.write   = f_brick_fop_write,
-	.poll    = f_brick_fop_poll,
+	.open    = f_brick_data_fop_open,
+	.release = f_brick_data_fop_release,
+	.read    = f_brick_data_fop_read,
+	.write   = f_brick_data_fop_write,
+	.poll    = f_brick_data_fop_poll,
 };
 
-static struct miscdevice f_brick_dev = {
+static struct miscdevice f_brick_data_dev = {
 	.minor = MISC_DYNAMIC_MINOR,
-	.name  = "g_red_brick",
-	.fops  = &f_brick_fops,
+	.name  = "g_red_brick_data",
+	.fops  = &f_brick_data_fops,
+};
+
+static ssize_t f_brick_state_fop_read(struct file *fp, char __user *buf,
+                                      size_t buf_len, loff_t *pos)
+{
+	struct f_brick_ctx *ctx = _f_brick_ctx;
+	unsigned long flags;
+	u8 state;
+	size_t copy_len;
+	size_t total_len = 0;
+
+	printk(">>>>>>>>>>>>>>>>>> enter f_brick_data_fop_read\n");
+
+	if (buf_len == 0) {
+		return 0;
+	}
+
+	if (*pos >= sizeof(state)) {
+		return 0;
+	}
+
+	copy_len = sizeof(state) - *pos;
+
+	if (!access_ok(VERIFY_WRITE, buf, buf_len)) {
+		return -EFAULT;
+	}
+
+	spin_lock_irqsave(&ctx->lock, flags);
+
+	state = ctx->state;
+	ctx->state_changed = 0;
+
+	spin_unlock_irqrestore(&ctx->lock, flags);
+
+	copy_len -= copy_to_user(buf, &state, copy_len);
+
+	total_len += copy_len;
+
+	if (total_len == 0) {
+		spin_lock_irqsave(&ctx->lock, flags);
+
+		ctx->state_changed = 1;
+
+		spin_unlock_irqrestore(&ctx->lock, flags);
+
+		return -EAGAIN;
+	}
+
+	*pos += total_len;
+
+	return total_len;
+}
+
+static unsigned int f_brick_state_fop_poll(struct file *fp, poll_table *wait)
+{
+	struct f_brick_ctx *ctx = _f_brick_ctx;
+	unsigned long flags;
+	unsigned int status = 0;
+
+	printk(">>>>>>>>>>>>>>>>>> enter f_brick_state_fop_poll\n");
+
+	poll_wait(fp, &ctx->state_wait, wait);
+
+	spin_lock_irqsave(&ctx->lock, flags);
+
+	if (ctx->state_changed) {
+		status |= POLLIN | POLLRDNORM;
+	}
+
+	spin_unlock_irqrestore(&ctx->lock, flags);
+
+	return status;
+}
+
+static loff_t f_brick_state_llseek(struct file *fp, loff_t offset, int origin)
+{
+	struct f_brick_ctx *ctx = _f_brick_ctx;
+	unsigned long flags;
+	loff_t ret;
+
+	spin_lock_irqsave(&ctx->lock, flags);
+
+	switch (origin) {
+	case SEEK_END:
+		offset += sizeof(ctx->state);
+
+		break;
+
+	case SEEK_CUR:
+		offset += fp->f_pos;
+
+		break;
+	}
+
+	ret = -EINVAL;
+
+	if (offset >= 0) {
+		if (offset != fp->f_pos) {
+			fp->f_pos = offset;
+			fp->f_version = 0;
+		}
+
+		ret = offset;
+	}
+
+	spin_unlock_irqrestore(&ctx->lock, flags);
+
+	return ret;
+}
+
+static const struct file_operations f_brick_state_fops = {
+	.owner   = THIS_MODULE,
+	.read    = f_brick_state_fop_read,
+	.poll    = f_brick_state_fop_poll,
+	.llseek  = f_brick_state_llseek,
 };
 
 static int f_brick_setup(void)
@@ -1005,6 +1144,10 @@ static int f_brick_setup(void)
 
 	ctx->ep_in = NULL;
 	ctx->ep_out = NULL;
+
+	ctx->state = F_BRICK_STATE_DISCONNECTED;
+	ctx->state_changed = 0;
+	init_waitqueue_head(&ctx->state_wait);
 
 	ctx->is_open = 0;
 
@@ -1031,15 +1174,28 @@ static int f_brick_setup(void)
 
 	_f_brick_ctx = ctx;
 
-	/* register /dev/g_red_brick */
-	ret = misc_register(&f_brick_dev);
+	/* register /dev/g_red_brick_data */
+	ret = misc_register(&f_brick_data_dev);
 
 	if (ret < 0) {
 		_f_brick_ctx = NULL;
 
 		kfree(ctx);
 
-		printk(KERN_ERR "could not register /dev/g_red_brick\n");
+		printk(KERN_ERR "could not register /dev/g_red_brick_data\n");
+
+		return ret;
+	}
+
+	/* create /proc/g_red_brick_state */
+	if (!proc_create("g_red_brick_state", 0, NULL, &f_brick_state_fops)) {
+		misc_deregister(&f_brick_data_dev);
+
+		_f_brick_ctx = NULL;
+
+		kfree(ctx);
+
+		printk(KERN_ERR "could not register /proc/g_red_brick_state\n");
 
 		return ret;
 	}
@@ -1057,7 +1213,8 @@ static void f_brick_cleanup(void)
 		return;
 	}
 
-	misc_deregister(&f_brick_dev);
+	remove_proc_entry("g_red_brick_state", NULL);
+	misc_deregister(&f_brick_data_dev);
 
 	_f_brick_ctx = NULL;
 
