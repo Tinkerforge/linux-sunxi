@@ -541,79 +541,106 @@ static void f_brick_func_unbind(struct usb_configuration *c, struct usb_function
 	}
 }
 
-static int f_brick_func_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
+static int f_brick_enable_endpoint(struct usb_ep *ep, struct usb_function *f)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	struct usb_composite_dev *cdev = f->config->cdev;
 	int ret;
+
+	/* first disable endpoint, if it is already enabled */
+	if (ep->driver_data) {
+		usb_ep_disable(ep);
+	} else {
+		ret = config_ep_by_speed(cdev->gadget, f, ep);
+
+		if (ret < 0) {
+			return ret;
+		}
+	}
+
+	/* enable endpoint */
+	ret = usb_ep_enable(ep);
+
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* mark endpoint as enabled */
+	ep->driver_data = ctx;
+
+	return ret;
+}
+
+static void f_brick_disable_endpoint(struct usb_ep *ep)
+{
+	int ret;
+
+	if (ep->driver_data) {
+		/* disable endpoint */
+		ret = usb_ep_disable(ep);
+
+		if (ret < 0) {
+			printk(">>>>>>>>>>>>>>>>>> usb_ep_disable failed %d\n", ret);
+		}
+
+		/* mark endpoint as disabled */
+		ep->driver_data = NULL;
+	}
+}
+
+static int f_brick_func_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
+{
+	struct f_brick_ctx *ctx = _f_brick_ctx;
+	int ret;
 	unsigned long flags;
+	struct usb_request *req;
 
 	printk(">>>>>>>>>>>>>>>>>> enter f_brick_func_set_alt\n");
 
-	ret = config_ep_by_speed(cdev->gadget, f, ctx->ep_in);
+	/* enable in endpoint */
+	ret = f_brick_enable_endpoint(ctx->ep_in, f);
 
 	if (ret < 0) {
 		return ret;
 	}
 
-	ret = usb_ep_enable(ctx->ep_in);
+	/* enable out endpoint */
+	ret = f_brick_enable_endpoint(ctx->ep_out, f);
 
 	if (ret < 0) {
-		return ret;
-	}
-
-	ret = config_ep_by_speed(cdev->gadget, f, ctx->ep_out);
-
-	if (ret < 0) {
-		return ret;
-	}
-
-	ret = usb_ep_enable(ctx->ep_out);
-
-	if (ret < 0) {
-		usb_ep_disable(ctx->ep_in);
+		f_brick_disable_endpoint(ctx->ep_in);
 
 		return ret;
 	}
 
 	spin_lock_irqsave(&ctx->lock, flags);
-	//ctx->state = STATE_READY;
 
-	/* readers may be blocked waiting for us to go online */
-	//wake_up(&ctx->read_wq);
+	/* move all complete RX requests back to idle */
+	while (!list_empty(&ctx->rx_reqs_complete)) {
+		req = list_first_entry(&ctx->rx_reqs_complete, struct usb_request, list);
+		list_del_init(&req->list);
 
-
-
-	/*for (i = 0; i < RX_REQ_MAX; i++) {
-		status = usb_ep_queue(ctx->ep_out, ctx->rx_req[i], GFP_ATOMIC);
-		if (status)
-			printk("PPPHHH: usb_ep_queue -> error: %s queue req --> %d\n",
-					ctx->ep_out->name, status);
-	}*/
-
-	//while ((req = f_brick_req_get(&ctx->tx_idle)))
-	//	f_brick_request_free(req, ctx->ep_in);
-
-
-
-	// FIXME: move all request from rx_reqs_complete back to rx_reqs_idle
-
-	if (ctx->rx_partial_req) {
-		list_add_tail(&ctx->rx_partial_req->list, &ctx->rx_reqs_idle);
+		list_add_tail(&req->list, &ctx->rx_reqs_idle);
 	}
 
-	ctx->rx_partial_req = NULL;
-	ctx->rx_partial_buf = NULL;
-	ctx->rx_partial_buf_len = 0;
+	/* move partial requests back to idle */
+	if (ctx->rx_partial_req) {
+		list_add_tail(&ctx->rx_partial_req->list, &ctx->rx_reqs_idle);
+
+		ctx->rx_partial_req = NULL;
+		ctx->rx_partial_buf = NULL;
+		ctx->rx_partial_buf_len = 0;
+	}
 
 	if (ctx->tx_partial_req) {
 		list_add_tail(&ctx->tx_partial_req->list, &ctx->tx_reqs_idle);
+
+		ctx->tx_partial_req = NULL;
+		ctx->tx_partial_buf = NULL;
+		ctx->tx_partial_buf_len = 0;
 	}
 
-	ctx->tx_partial_req = NULL;
-	ctx->tx_partial_buf = NULL;
-	ctx->tx_partial_buf_len = 0;
-
+	/* enqueue RX requests */
 	f_brick_enqueue_rx_idle();
 
 	spin_unlock_irqrestore(&ctx->lock, flags);
@@ -624,14 +651,19 @@ static int f_brick_func_set_alt(struct usb_function *f, unsigned intf, unsigned 
 static void f_brick_func_disable(struct usb_function *f)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
+	unsigned long flags;
 
 	printk(">>>>>>>>>>>>>>>>>> enter f_brick_func_disable\n");
 
-	usb_ep_disable(ctx->ep_in);
-	usb_ep_disable(ctx->ep_out);
+	spin_lock_irqsave(&ctx->lock, flags);
+
+	f_brick_disable_endpoint(ctx->ep_in);
+	f_brick_disable_endpoint(ctx->ep_out);
 
 	/* unblock waiting reader, as there is currently nothing to read */
 	wake_up(&ctx->rx_wait);
+
+	spin_unlock_irqrestore(&ctx->lock, flags);
 }
 
 static int f_brick_bind_config(struct usb_configuration *c)
