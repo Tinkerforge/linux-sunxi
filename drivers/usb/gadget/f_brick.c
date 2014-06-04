@@ -514,20 +514,31 @@ static int f_brick_func_bind(struct usb_configuration *c, struct usb_function *f
 
 static void f_brick_func_unbind(struct usb_configuration *c, struct usb_function *f)
 {
-	//struct f_brick_dev *dev = f_brick_func_to_dev(f);
-	/*struct f_brick_ctx *ctx = _f_brick_ctx;
+	struct f_brick_ctx *ctx = _f_brick_ctx;
 	struct usb_request *req;
-	int i;*/
 
 	printk(">>>>>>>>>>>>>>>>>> enter f_brick_func_unbind\n");
 
-	/*while ((req = f_brick_req_get(&ctx->tx_idle)))
+	while (!list_empty(&ctx->rx_reqs_idle)) {
+		req = list_first_entry(&ctx->rx_reqs_idle, struct usb_request, list);
+		list_del(&req->list);
+
+		f_brick_request_free(req, ctx->ep_out);
+	}
+
+	while (!list_empty(&ctx->rx_reqs_complete)) {
+		req = list_first_entry(&ctx->rx_reqs_complete, struct usb_request, list);
+		list_del(&req->list);
+
+		f_brick_request_free(req, ctx->ep_out);
+	}
+
+	while (!list_empty(&ctx->tx_reqs_idle)) {
+		req = list_first_entry(&ctx->tx_reqs_idle, struct usb_request, list);
+		list_del(&req->list);
+
 		f_brick_request_free(req, ctx->ep_in);
-
-	for (i = 0; i < RX_REQ_MAX; i++)
-		f_brick_request_free(ctx->rx_req[i], ctx->ep_out);
-
-	ctx->state = STATE_OFFLINE;*/
+	}
 }
 
 static int f_brick_func_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
