@@ -64,11 +64,12 @@ struct f_brick_ctx {
 	struct usb_ep *ep_in;
 	struct usb_ep *ep_out;
 
+	u8 state_is_open; /* /proc/g_red_brick_state */
 	u8 state;
 	u8 state_changed;
 	wait_queue_head_t state_wait;
 
-	u8 is_open; /* /dev/g_red_brick */
+	u8 data_is_open; /* /dev/g_red_brick_data */
 
 	spinlock_t lock;
 	struct mutex fops_lock;
@@ -729,11 +730,11 @@ static int f_brick_data_fop_open(struct inode *ip, struct file *fp)
 
 	printk(">>>>>>>>>>>>>>>>>> enter f_brick_data_fop_open\n");
 
-	if (ctx->is_open) {
+	if (ctx->data_is_open) {
 		return -EBUSY;
 	}
 
-	ctx->is_open = 1;
+	ctx->data_is_open = 1;
 
 	return 0;
 }
@@ -744,7 +745,7 @@ static int f_brick_data_fop_release(struct inode *ip, struct file *fp)
 
 	printk(">>>>>>>>>>>>>>>>>> enter f_brick_data_fop_release\n");
 
-	ctx->is_open = 0;
+	ctx->data_is_open = 0;
 
 	return 0;
 }
@@ -1013,6 +1014,32 @@ static struct miscdevice f_brick_data_dev = {
 	.fops  = &f_brick_data_fops,
 };
 
+static int f_brick_state_fop_open(struct inode *ip, struct file *fp)
+{
+	struct f_brick_ctx *ctx = _f_brick_ctx;
+
+	printk(">>>>>>>>>>>>>>>>>> enter f_brick_state_fop_open\n");
+
+	if (ctx->state_is_open) {
+		return -EBUSY;
+	}
+
+	ctx->state_is_open = 1;
+
+	return 0;
+}
+
+static int f_brick_state_fop_release(struct inode *ip, struct file *fp)
+{
+	struct f_brick_ctx *ctx = _f_brick_ctx;
+
+	printk(">>>>>>>>>>>>>>>>>> enter f_brick_state_fop_release\n");
+
+	ctx->state_is_open = 0;
+
+	return 0;
+}
+
 static ssize_t f_brick_state_fop_read(struct file *fp, char __user *buf,
                                       size_t buf_len, loff_t *pos)
 {
@@ -1085,7 +1112,7 @@ static unsigned int f_brick_state_fop_poll(struct file *fp, poll_table *wait)
 	return status;
 }
 
-static loff_t f_brick_state_llseek(struct file *fp, loff_t offset, int origin)
+static loff_t f_brick_state_fop_llseek(struct file *fp, loff_t offset, int origin)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	unsigned long flags;
@@ -1123,9 +1150,11 @@ static loff_t f_brick_state_llseek(struct file *fp, loff_t offset, int origin)
 
 static const struct file_operations f_brick_state_fops = {
 	.owner   = THIS_MODULE,
+	.open    = f_brick_state_fop_open,
+	.release = f_brick_state_fop_release,
 	.read    = f_brick_state_fop_read,
 	.poll    = f_brick_state_fop_poll,
-	.llseek  = f_brick_state_llseek,
+	.llseek  = f_brick_state_fop_llseek,
 };
 
 static int f_brick_setup(void)
@@ -1145,11 +1174,13 @@ static int f_brick_setup(void)
 	ctx->ep_in = NULL;
 	ctx->ep_out = NULL;
 
+	ctx->state_is_open = 0;
 	ctx->state = F_BRICK_STATE_DISCONNECTED;
 	ctx->state_changed = 0;
+
 	init_waitqueue_head(&ctx->state_wait);
 
-	ctx->is_open = 0;
+	ctx->data_is_open = 0;
 
 	spin_lock_init(&ctx->lock);
 	mutex_init(&ctx->fops_lock);
