@@ -313,7 +313,7 @@ static void f_brick_complete_in(struct usb_ep *ep, struct usb_request *req)
 	spin_lock_irqsave(&ctx->lock, flags);
 
 	list_del_init(&req->list); /* remove from tx_reqs_active */
-	list_add(&req->list, &ctx->tx_reqs_idle);
+	list_add_tail(&req->list, &ctx->tx_reqs_idle);
 
 	wake_up(&ctx->rx_wait);
 
@@ -335,18 +335,20 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 	list_del_init(&req->list); /* remove from rx_reqs_active */
 
 	if (req->status == 0 && req->actual > 0) {
-		list_add(&req->list, &ctx->rx_reqs_complete);
+		/* successful RX request containing data */
+		list_add_tail(&req->list, &ctx->rx_reqs_complete);
 
 		wake_up(&ctx->rx_wait);
 	} else {
+		/* connected, try to enqueue RX request again */
 		ret = usb_ep_queue(ctx->ep_out, req, GFP_ATOMIC);
 
 		if (ret < 0) {
 			printk("PPPHHH: f_brick_complete_out rx submit --> %d\n", ret);
 
-			list_add(&req->list, &ctx->rx_reqs_idle);
+			list_add_tail(&req->list, &ctx->rx_reqs_idle);
 		} else {
-			list_add(&req->list, &ctx->rx_reqs_active);
+			list_add_tail(&req->list, &ctx->rx_reqs_active);
 		}
 	}
 
