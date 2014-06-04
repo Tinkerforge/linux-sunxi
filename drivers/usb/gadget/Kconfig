@@ -558,6 +558,13 @@ config USB_GADGET_SUPERSPEED
 	bool
 	depends on USB_GADGET_DUALSPEED
 
+config USB_GADGET_CDC_ACM_IAD_NAME
+	string "USB Gadget CDC ACM IAD Name"
+	default "CDC Serial"
+	help
+	  On composite devices MS-Windows uses the IAD name as device name before
+	  a driver is installed.
+
 #
 # USB Gadget Drivers
 #

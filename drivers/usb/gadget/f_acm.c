@@ -283,7 +283,7 @@ static struct usb_descriptor_header *acm_ss_function[] = {
 static struct usb_string acm_string_defs[] = {
 	[ACM_CTRL_IDX].s = "CDC Abstract Control Model (ACM)",
 	[ACM_DATA_IDX].s = "CDC ACM Data",
-	[ACM_IAD_IDX ].s = "CDC Serial",
+	[ACM_IAD_IDX ].s = CONFIG_USB_GADGET_CDC_ACM_IAD_NAME,
 	{  /* ZEROES END LIST */ },
 };
 
