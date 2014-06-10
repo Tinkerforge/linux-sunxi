@@ -356,7 +356,7 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 		list_add_tail(&req->list, &ctx->rx_reqs_complete);
 
 		wake_up(&ctx->rx_wait);
-	} else if (ctx->state == F_BRICK_STATE_CONNECTED) {
+	} else if (ctx->state == F_BRICK_STATE_CONNECTED && req->status != -ESHUTDOWN) {
 		/* connected, try to enqueue RX request again */
 		ret = usb_ep_queue(ctx->ep_out, req, GFP_ATOMIC);
 
