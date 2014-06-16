@@ -323,7 +323,7 @@ static void f_brick_complete_in(struct usb_ep *ep, struct usb_request *req)
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	unsigned long flags;
 
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_complete_in\n");
+	//printk(">>>>>>>>>>>>>>>>>> enter f_brick_complete_in: req %p, status %d\n", req, req->status);
 
 	spin_lock_irqsave(&ctx->lock, flags);
 
@@ -345,7 +345,7 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 	unsigned long flags;
 	int ret;
 
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_complete_out\n");
+	//printk(">>>>>>>>>>>>>>>>>> enter f_brick_complete_out: req %p, status %d, actual %d\n", req, req->status, req->actual);
 
 	spin_lock_irqsave(&ctx->lock, flags);
 
@@ -382,8 +382,6 @@ static void f_brick_enqueue_rx_idle(void)
 	struct usb_request *req;
 	int ret;
 
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_enqueue_rx_idle\n");
-
 	while (!list_empty(&ctx->rx_reqs_idle)) {
 		req = list_first_entry(&ctx->rx_reqs_idle, struct usb_request, list);
 		list_del_init(&req->list);
@@ -409,8 +407,6 @@ static int f_brick_func_setup(struct usb_function *f, const struct usb_ctrlreque
 	u16 w_index = le16_to_cpu(ctrl->wIndex);
 	u16 w_value = le16_to_cpu(ctrl->wValue);
 	u16 w_length = le16_to_cpu(ctrl->wLength);
-
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_func_setup\n");
 
 	/*printk("PPPHHH: f_brick_func_setup "
 			"%02x.%02x v%04x i%04x l%u\n",
@@ -462,8 +458,6 @@ static int f_brick_func_bind(struct usb_configuration *c, struct usb_function *f
 	int ret;
 	struct usb_request *req;
 	int i;
-
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_func_bind\n");
 
 	ctx->cdev = c->cdev; // FIXME: is this necessary? already done in f_brick_bind_config
 
@@ -536,8 +530,6 @@ static void f_brick_func_unbind(struct usb_configuration *c, struct usb_function
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	struct usb_request *req;
-
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_func_unbind\n");
 
 	while (!list_empty(&ctx->rx_reqs_idle)) {
 		req = list_first_entry(&ctx->rx_reqs_idle, struct usb_request, list);
@@ -615,8 +607,6 @@ static int f_brick_func_set_alt(struct usb_function *f, unsigned intf, unsigned 
 	unsigned long flags;
 	struct usb_request *req;
 
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_func_set_alt\n");
-
 	/* enable in endpoint */
 	ret = f_brick_enable_endpoint(ctx->ep_in, f);
 
@@ -676,8 +666,6 @@ static void f_brick_func_disable(struct usb_function *f)
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	unsigned long flags;
 
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_func_disable\n");
-
 	spin_lock_irqsave(&ctx->lock, flags);
 
 	f_brick_set_state(F_BRICK_STATE_DISCONNECTED);
@@ -695,8 +683,6 @@ static int f_brick_bind_config(struct usb_configuration *c)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	int ret;
-
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_bind_config\n");
 
 	if (f_brick_string_defs[F_BRICK_STRING_INTERFACE_IDX].id == 0) {
 		ret = usb_string_id(c->cdev);
@@ -728,8 +714,6 @@ static int f_brick_data_fop_open(struct inode *ip, struct file *fp)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_data_fop_open\n");
-
 	if (ctx->data_is_open) {
 		return -EBUSY;
 	}
@@ -742,8 +726,6 @@ static int f_brick_data_fop_open(struct inode *ip, struct file *fp)
 static int f_brick_data_fop_release(struct inode *ip, struct file *fp)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
-
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_data_fop_release\n");
 
 	ctx->data_is_open = 0;
 
@@ -759,8 +741,6 @@ static ssize_t f_brick_data_fop_read(struct file *fp, char __user *buf,
 	size_t copy_len;
 	size_t total_len = 0;
 	int ret;
-
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_data_fop_read\n");
 
 	if (buf_len == 0) {
 		return 0;
@@ -861,8 +841,6 @@ static ssize_t f_brick_data_fop_write(struct file *fp, const char __user *buf,
 	size_t copy_len;
 	size_t total_len = 0;
 	int ret;
-
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_data_fop_write\n");
 
 	if (buf_len == 0) {
 		return 0;
@@ -972,8 +950,6 @@ static unsigned int f_brick_data_fop_poll(struct file *fp, poll_table *wait)
 	unsigned long flags;
 	unsigned int status = 0;
 
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_data_fop_poll\n");
-
 	/*mutex_lock(&dev->lock_printer_io);
 	spin_lock_irqsave(&dev->lock, flags);
 	setup_rx_reqs(dev);
@@ -1018,8 +994,6 @@ static int f_brick_state_fop_open(struct inode *ip, struct file *fp)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_state_fop_open\n");
-
 	if (ctx->state_is_open) {
 		return -EBUSY;
 	}
@@ -1032,8 +1006,6 @@ static int f_brick_state_fop_open(struct inode *ip, struct file *fp)
 static int f_brick_state_fop_release(struct inode *ip, struct file *fp)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
-
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_state_fop_release\n");
 
 	ctx->state_is_open = 0;
 
@@ -1048,8 +1020,6 @@ static ssize_t f_brick_state_fop_read(struct file *fp, char __user *buf,
 	u8 state;
 	size_t copy_len;
 	size_t total_len = 0;
-
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_data_fop_read\n");
 
 	if (buf_len == 0) {
 		return 0;
@@ -1096,8 +1066,6 @@ static unsigned int f_brick_state_fop_poll(struct file *fp, poll_table *wait)
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	unsigned long flags;
 	unsigned int status = 0;
-
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_state_fop_poll\n");
 
 	poll_wait(fp, &ctx->state_wait, wait);
 
@@ -1161,8 +1129,6 @@ static int f_brick_setup(void)
 {
 	struct f_brick_ctx *ctx;
 	int ret;
-
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_setup\n");
 
 	/* allocate and initialize f_brick_ctx */
 	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
@@ -1237,8 +1203,6 @@ static int f_brick_setup(void)
 static void f_brick_cleanup(void)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
-
-	printk(">>>>>>>>>>>>>>>>>> enter f_brick_cleanup\n");
 
 	if (!ctx) {
 		return;
