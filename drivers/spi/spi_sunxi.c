@@ -511,6 +511,14 @@ void aw_spi_set_sample_delay(u32 on_off, void *base_addr)
 }
 
 
+/* keep unused burst */
+void spi_clear_dhb(void *base_addr)
+{
+	u32 reg_val = readl(base_addr + SPI_CTL_REG);
+	reg_val &= ~SPI_CTL_DHB;
+	writel(reg_val, base_addr + SPI_CTL_REG);
+}
+
 static int spi_sunxi_get_cfg_csbitmap(int bus_num);
 
 /* flush d-cache */
@@ -582,7 +590,7 @@ static void spi_sunxi_dma_cb(struct sw_dma_chan *dma_ch, void *buf, int size, en
     else {
         spi_wrn("unknow dma direction = %d \n",aw_spi->dma_dir);
     }
-    aw_spi_sel_dma_type(0, aw_spi->base_addr);
+    //aw_spi_sel_dma_type(0, aw_spi->base_addr);
 	spin_unlock_irqrestore(&aw_spi->lock, flags);
 }
 #else
@@ -608,7 +616,7 @@ static void spi_sunxi_dma_tx_cb(struct sw_dma_chan *dma_ch, void *buf, int size,
 
     //spi_msg("spi dma tx -write data\n");
     aw_spi_disable_dma_irq(SPI_DRQEN_THE, aw_spi->base_addr);
-    aw_spi_sel_dma_type(0, aw_spi->base_addr);
+    //aw_spi_sel_dma_type(0, aw_spi->base_addr);
 	spin_unlock_irqrestore(&aw_spi->lock, flags);
 }
 
@@ -634,7 +642,7 @@ static void spi_sunxi_dma_rx_cb(struct sw_dma_chan *dma_ch, void *buf, int size,
 	}
     //spi_msg("spi dma rx -read data\n");
     aw_spi_disable_dma_irq(SPI_DRQEN_RHF, aw_spi->base_addr);
-    aw_spi_sel_dma_type(0, aw_spi->base_addr);
+    //aw_spi_sel_dma_type(0, aw_spi->base_addr);
 	spin_unlock_irqrestore(&aw_spi->lock, flags);
 }
 #endif
@@ -950,7 +958,7 @@ static int spi_sunxi_xfer(struct spi_device *spi, struct spi_transfer *t)
 		    spi_wrn("Full duplex not supported for normal dma!\n");
 			return EINVAL;
 		}
-        aw_spi_sel_dma_type(0, base_addr);
+        //aw_spi_sel_dma_type(0, base_addr);
         #else
         aw_spi_sel_dma_type(1, base_addr);
         #endif
@@ -1015,7 +1023,7 @@ static int spi_sunxi_xfer(struct spi_device *spi, struct spi_transfer *t)
 			    if(aw_spi_query_rxfifo(base_addr)){
 			        *rx_buf++ =  readb(base_addr + SPI_RXDATA_REG);//fetch data
 			        --rx_len;
-			        poll_time = 0xffff;
+			        poll_time = 0xfffff;
 			    }
 			}
 		} else {
@@ -1081,6 +1089,10 @@ static void spi_sunxi_work(struct work_struct *work)
 			}
 			/* update the new cs value */
 			cs_change = t->cs_change;
+
+			if (t->rx_buf && t->tx_buf)
+				spi_clear_dhb(aw_spi->base_addr);
+
 			/*
              * do transfer
 			 * > 64 : cpu ;  =< 64 : dma
