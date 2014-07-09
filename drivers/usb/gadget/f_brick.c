@@ -38,8 +38,8 @@
 #define F_BRICK_STRING_INTERFACE_IDX 0
 #define F_BRICK_STRING_MICROSOFT_OS_IDX 1
 
-#define F_BRICK_STATE_DISCONNECTED 0
-#define F_BRICK_STATE_CONNECTED 1
+#define F_BRICK_STATE_USB_DISCONNECTED 0
+#define F_BRICK_STATE_USB_CONNECTED 1
 
 #define F_BRICK_TX_REQ_COUNT 10
 #define F_BRICK_RX_REQ_COUNT 10
@@ -64,12 +64,12 @@ struct f_brick_ctx {
 	struct usb_ep *ep_in;
 	struct usb_ep *ep_out;
 
-	u8 state_is_open; /* /proc/g_red_brick_state */
+	u8 state_file_is_open; /* /proc/g_red_brick_state */
 	u8 state;
 	u8 state_changed;
 	wait_queue_head_t state_wait;
 
-	u8 data_is_open; /* /dev/g_red_brick_data */
+	u8 data_file_is_open; /* /dev/g_red_brick_data */
 
 	spinlock_t lock;
 	struct mutex fops_lock;
@@ -277,7 +277,7 @@ static void f_brick_set_state(u8 state)
 		ctx->state = state;
 		ctx->state_changed = 1;
 
-		if (ctx->state == F_BRICK_STATE_CONNECTED && !list_empty(&ctx->tx_reqs_idle)) {
+		if (ctx->state == F_BRICK_STATE_USB_CONNECTED && !list_empty(&ctx->tx_reqs_idle)) {
 			wake_up(&ctx->tx_wait);
 		}
 
@@ -330,7 +330,7 @@ static void f_brick_complete_in(struct usb_ep *ep, struct usb_request *req)
 	list_del_init(&req->list); /* remove from tx_reqs_active, if it's in there */
 	list_add(&req->list, &ctx->tx_reqs_idle);
 
-	if (ctx->state == F_BRICK_STATE_CONNECTED) {
+	if (ctx->state == F_BRICK_STATE_USB_CONNECTED) {
 		wake_up(&ctx->tx_wait);
 	}
 
@@ -343,7 +343,6 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	unsigned long flags;
-	int ret;
 
 //	printk(">>>>>>>>>>>>>>>>>> enter f_brick_complete_out: req %p, status %d, actual %d\n", req, req->status, req->actual);
 
@@ -402,48 +401,34 @@ static int f_brick_func_setup(struct usb_function *f, const struct usb_ctrlreque
 {
 	struct usb_composite_dev *cdev = f->config->cdev;
 	int value = -EOPNOTSUPP;
+	int rc;
 	u16 w_index = le16_to_cpu(ctrl->wIndex);
-	u16 w_value = le16_to_cpu(ctrl->wValue);
 	u16 w_length = le16_to_cpu(ctrl->wLength);
 
-	/*printk("PPPHHH: f_brick_func_setup "
-			"%02x.%02x v%04x i%04x l%u\n",
-			ctrl->bRequestType, ctrl->bRequest,
-			w_value, w_index, w_length);*/
-
 	if ((ctrl->bRequestType & USB_TYPE_MASK) == USB_TYPE_VENDOR) {
-	/*	printk("PPPHHH: vendor request: %d index: %d value: %d length: %d\n",
-			ctrl->bRequest, w_index, w_value, w_length);*/
-
-		if (ctrl->bRequest == 42
-				&& (ctrl->bRequestType & USB_DIR_IN)
-				&& (w_index == 4)) {
+		if (ctrl->bRequest == 42 && (ctrl->bRequestType & USB_DIR_IN) && (w_index == 4)) {
 			value = (w_length < sizeof(ms_compat_id_desc) ?
-					w_length : sizeof(ms_compat_id_desc));
-			memcpy(cdev->req->buf, &ms_compat_id_desc, value);
-		/*printk("PPPHHH: vendor request A: %d index: %d value: %d length: %d ---> send %d bytes back\n",
-			ctrl->bRequest, w_index, w_value, w_length, value);*/
-		}
+			         w_length : sizeof(ms_compat_id_desc));
 
-		else if (ctrl->bRequest == 42
-				&& (ctrl->bRequestType & USB_DIR_IN)
-				&& (w_index == 5)) {
+			memcpy(cdev->req->buf, &ms_compat_id_desc, value);
+		} else if (ctrl->bRequest == 42 && (ctrl->bRequestType & USB_DIR_IN) && (w_index == 5)) {
 			value = (w_length < sizeof(ms_properties_desc) ?
-					w_length : sizeof(ms_properties_desc));
+			         w_length : sizeof(ms_properties_desc));
+
 			memcpy(cdev->req->buf, &ms_properties_desc, value);
-		/*printk("PPPHHH: vendor request B: %d index: %d value: %d length: %d ---> send %d bytes back\n",
-			ctrl->bRequest, w_index, w_value, w_length, value);*/
 		}
 	}
 
 	/* respond with data transfer or status phase? */
 	if (value >= 0) {
-		int rc;
 		cdev->req->zero = value < w_length;
 		cdev->req->length = value;
+
 		rc = usb_ep_queue(cdev->gadget->ep0, cdev->req, GFP_ATOMIC);
-		if (rc < 0)
+
+		if (rc < 0) {
 			printk("PPPHHH: %s: response queue error\n", __func__);
+		}
 	}
 
 	return value;
@@ -649,7 +634,7 @@ static int f_brick_func_set_alt(struct usb_function *f, unsigned intf, unsigned 
 	}
 
 	/* wake waiting writer */
-	f_brick_set_state(F_BRICK_STATE_CONNECTED);
+	f_brick_set_state(F_BRICK_STATE_USB_CONNECTED);
 
 	spin_unlock_irqrestore(&ctx->lock, flags);
 
@@ -663,7 +648,7 @@ static void f_brick_func_disable(struct usb_function *f)
 
 	spin_lock_irqsave(&ctx->lock, flags);
 
-	f_brick_set_state(F_BRICK_STATE_DISCONNECTED);
+	f_brick_set_state(F_BRICK_STATE_USB_DISCONNECTED);
 
 	f_brick_disable_endpoint(ctx->ep_in);
 	f_brick_disable_endpoint(ctx->ep_out);
@@ -709,11 +694,11 @@ static int f_brick_data_fop_open(struct inode *ip, struct file *fp)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 
-	if (ctx->data_is_open) {
+	if (ctx->data_file_is_open) {
 		return -EBUSY;
 	}
 
-	ctx->data_is_open = 1;
+	ctx->data_file_is_open = 1;
 
 	return 0;
 }
@@ -722,7 +707,7 @@ static int f_brick_data_fop_release(struct inode *ip, struct file *fp)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 
-	ctx->data_is_open = 0;
+	ctx->data_file_is_open = 0;
 
 	return 0;
 }
@@ -738,7 +723,6 @@ static ssize_t f_brick_data_fop_read(struct file *fp, char __user *buf,
 	struct usb_request *req;
 	size_t copy_len;
 	size_t total_len = 0;
-	int ret;
 
 	if (buf_len == 0) {
 		return 0;
@@ -857,7 +841,7 @@ static ssize_t f_brick_data_fop_write(struct file *fp, const char __user *buf,
 	spin_lock_irqsave(&ctx->lock, flags);
 
 	/* if no TX requests are available wait for some */
-	if (ctx->state != F_BRICK_STATE_CONNECTED || list_empty(&ctx->tx_reqs_idle)) {
+	if (ctx->state != F_BRICK_STATE_USB_CONNECTED || list_empty(&ctx->tx_reqs_idle)) {
 		spin_unlock_irqrestore(&ctx->lock, flags);
 
 		if (fp->f_flags & (O_NONBLOCK | O_NDELAY)) {
@@ -866,7 +850,7 @@ static ssize_t f_brick_data_fop_write(struct file *fp, const char __user *buf,
 			return -EAGAIN;
 		}
 
-		if (wait_event_interruptible(ctx->tx_wait, ctx->state == F_BRICK_STATE_CONNECTED && !list_empty(&ctx->tx_reqs_idle)) < 0) {
+		if (wait_event_interruptible(ctx->tx_wait, ctx->state == F_BRICK_STATE_USB_CONNECTED && !list_empty(&ctx->tx_reqs_idle)) < 0) {
 			mutex_unlock(&ctx->fops_lock);
 
 			return -ERESTARTSYS;
@@ -876,7 +860,7 @@ static ssize_t f_brick_data_fop_write(struct file *fp, const char __user *buf,
 	}
 
 	/* copy available data from the user buffer */
-	while (buf_len > 0 && ctx->state == F_BRICK_STATE_CONNECTED && (ctx->tx_partial_req || !list_empty(&ctx->tx_reqs_idle))) {
+	while (buf_len > 0 && ctx->state == F_BRICK_STATE_USB_CONNECTED && (ctx->tx_partial_req || !list_empty(&ctx->tx_reqs_idle))) {
 		if (!ctx->tx_partial_req) {
 			req = list_first_entry(&ctx->tx_reqs_idle, struct usb_request, list);
 			list_del_init(&req->list);
@@ -965,7 +949,7 @@ static unsigned int f_brick_data_fop_poll(struct file *fp, poll_table *wait)
 
 	spin_lock_irqsave(&ctx->lock, flags);
 
-	if (ctx->state == F_BRICK_STATE_CONNECTED && !list_empty(&ctx->tx_reqs_idle)) {
+	if (ctx->state == F_BRICK_STATE_USB_CONNECTED && !list_empty(&ctx->tx_reqs_idle)) {
 		status |= POLLOUT | POLLWRNORM;
 	}
 
@@ -997,11 +981,11 @@ static int f_brick_state_fop_open(struct inode *ip, struct file *fp)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 
-	if (ctx->state_is_open) {
+	if (ctx->state_file_is_open) {
 		return -EBUSY;
 	}
 
-	ctx->state_is_open = 1;
+	ctx->state_file_is_open = 1;
 
 	return 0;
 }
@@ -1010,7 +994,7 @@ static int f_brick_state_fop_release(struct inode *ip, struct file *fp)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 
-	ctx->state_is_open = 0;
+	ctx->state_file_is_open = 0;
 
 	return 0;
 }
@@ -1143,13 +1127,13 @@ static int f_brick_setup(void)
 	ctx->ep_in = NULL;
 	ctx->ep_out = NULL;
 
-	ctx->state_is_open = 0;
-	ctx->state = F_BRICK_STATE_DISCONNECTED;
+	ctx->state_file_is_open = 0;
+	ctx->state = F_BRICK_STATE_USB_DISCONNECTED;
 	ctx->state_changed = 0;
 
 	init_waitqueue_head(&ctx->state_wait);
 
-	ctx->data_is_open = 0;
+	ctx->data_file_is_open = 0;
 
 	spin_lock_init(&ctx->lock);
 	mutex_init(&ctx->fops_lock);
