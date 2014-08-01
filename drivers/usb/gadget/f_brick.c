@@ -244,7 +244,7 @@ struct ms_properties_desc_property {
 	__le16 wPropertyNameLength;
 	u8 bPropertyName[42]; /* strlen("DeviceInterfaceGUIDs") * 2 + 2 */
 	__le32 dwPropertyDataLength;
-	u8 bPropertyData[80]; /* strlen("{870013DD-FB1D-4BD7-A96C-1F0B7D31AF41}") * 2 + 4 */
+	u8 bPropertyData[80]; /* strlen("{9536B3B1-6077-4A3B-9BAC-7C2CFA8A2BF3}") * 2 + 4 */
 } __attribute__((packed));
 
 /* Microsoft Extended Properties Descriptor */
@@ -264,7 +264,7 @@ struct {
 		.wPropertyNameLength   = __constant_cpu_to_le16(sizeof(ms_properties_desc.property.bPropertyName)),
 		.bPropertyName         = { 'D', 0, 'e', 0, 'v', 0, 'i', 0, 'c', 0, 'e', 0, 'I', 0, 'n', 0, 't', 0, 'e', 0, 'r', 0, 'f', 0, 'a', 0, 'c', 0, 'e', 0, 'G', 0, 'U', 0, 'I', 0, 'D', 0, 's', 0, 0, 0 },
 		.dwPropertyDataLength  = __constant_cpu_to_le32(sizeof(ms_properties_desc.property.bPropertyData)),
-		.bPropertyData         = { '{', 0, '8', 0, '7', 0, '0', 0, '0', 0, '1', 0, '3', 0, 'D', 0, 'D', 0, '-', 0, 'F', 0, 'B', 0, '1', 0, 'D', 0, '-', 0, '4', 0, 'B', 0, 'D', 0, '7', 0, '-', 0, 'A', 0, '9', 0, '6', 0, 'C', 0, '-', 0, '1', 0, 'F', 0, '0', 0, 'B', 0, '7', 0, 'D', 0, '3', 0, '1', 0, 'A', 0, 'F', 0, '4', 0, '1', 0, '}', 0, 0, 0, 0, 0 },
+		.bPropertyData         = { '{', 0, '9', 0, '5', 0, '3', 0, '6', 0, 'B', 0, '3', 0, 'B', 0, '1', 0, '-', 0, '6', 0, '0', 0, '7', 0, '7', 0, '-', 0, '4', 0, 'A', 0, '3', 0, 'B', 0, '-', 0, '9', 0, 'B', 0, 'A', 0, 'C', 0, '-', 0, '7', 0, 'C', 0, '2', 0, 'C', 0, 'F', 0, 'A', 0, '8', 0, 'A', 0, '2', 0, 'B', 0, 'F', 0, '3', 0, '}', 0, 0, 0, 0, 0 },
 	}
 };
 
