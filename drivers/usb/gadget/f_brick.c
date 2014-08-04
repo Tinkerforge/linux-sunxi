@@ -74,6 +74,8 @@ struct f_brick_ctx {
 	spinlock_t lock;
 	struct mutex fops_lock;
 
+	struct usb_request *tx_probe;
+
 	/* buffer to accumulate a packet to be send to the host. a single USB
 	 * request has to contain exactly one packet */
 	struct usb_request *tx_partial_req;
@@ -318,12 +320,32 @@ static void f_brick_request_free(struct usb_request *req, struct usb_ep *ep)
 	}
 }
 
+static void f_brick_complete_probe(struct usb_ep *ep, struct usb_request *req)
+{
+	struct f_brick_ctx *ctx = _f_brick_ctx;
+	unsigned long flags;
+
+//	printk(">>>>>>>>>>>>>>>>>> enter f_brick_complete_probe: req->buf %p, status %d\n", req->buf, req->status);
+
+	spin_lock_irqsave(&ctx->lock, flags);
+
+	ctx->tx_probe = req;
+
+	if (req->status == 0) {
+		f_brick_set_state(F_BRICK_STATE_USB_CONNECTED);
+	}
+
+	spin_unlock_irqrestore(&ctx->lock, flags);
+
+//	printk(">>>>>>>>>>>>>>>>>> leave f_brick_complete_probe: req->buf %p\n", req->buf);
+}
+
 static void f_brick_complete_in(struct usb_ep *ep, struct usb_request *req)
 {
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	unsigned long flags;
 
-//	printk(">>>>>>>>>>>>>>>>>> enter f_brick_complete_in: req %p, status %d\n", req, req->status);
+//	printk(">>>>>>>>>>>>>>>>>> enter f_brick_complete_in: req->buf %p, status %d\n", req->buf, req->status);
 
 	spin_lock_irqsave(&ctx->lock, flags);
 
@@ -335,6 +357,8 @@ static void f_brick_complete_in(struct usb_ep *ep, struct usb_request *req)
 	}
 
 	spin_unlock_irqrestore(&ctx->lock, flags);
+
+//	printk(">>>>>>>>>>>>>>>>>> leave f_brick_complete_in: req->buf %p\n", req->buf);
 }
 
 const char *red_brick_get_uid_str(void);
@@ -344,7 +368,7 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	unsigned long flags;
 
-//	printk(">>>>>>>>>>>>>>>>>> enter f_brick_complete_out: req %p, status %d, actual %d\n", req, req->status, req->actual);
+//	printk(">>>>>>>>>>>>>>>>>> enter f_brick_complete_out: req->buf %p, status %d, actual %d\n", req->buf, req->status, req->actual);
 
 	spin_lock_irqsave(&ctx->lock, flags);
 
@@ -361,7 +385,7 @@ static void f_brick_complete_out(struct usb_ep *ep, struct usb_request *req)
 
 	spin_unlock_irqrestore(&ctx->lock, flags);
 
-//	printk(">>>>>>>>>>>>>>>>>> leave f_brick_complete_out: req %p, status %d, actual %d\n", req, req->status, req->actual);
+//	printk(">>>>>>>>>>>>>>>>>> leave f_brick_complete_out: req->buf %p\n", req->buf);
 }
 
 static void f_brick_enqueue_rx_idle(void)
@@ -505,6 +529,14 @@ static int f_brick_func_bind(struct usb_configuration *c, struct usb_function *f
 	ctx->ep_out->driver_data = ctx; /* claim the endpoint */
 
 	/* allocate requests */
+	ctx->tx_probe = f_brick_request_new(ctx->ep_in, 1);
+
+	if (!ctx->tx_probe) {
+		return -ENOMEM;
+	}
+
+	ctx->tx_probe->complete = f_brick_complete_probe;
+
 	for (i = 0; i < F_BRICK_TX_REQ_COUNT; i++) {
 		req = f_brick_request_new(ctx->ep_in, F_BRICK_BULK_BUFFER_SIZE);
 
@@ -567,6 +599,12 @@ static void f_brick_func_unbind(struct usb_configuration *c, struct usb_function
 
 		f_brick_request_free(req, ctx->ep_in);
 	}
+
+	if (ctx->tx_probe) {
+		f_brick_request_free(ctx->tx_probe, ctx->ep_in);
+
+		ctx->tx_probe = NULL;
+	}
 }
 
 static int f_brick_enable_endpoint(struct usb_ep *ep, struct usb_function *f)
@@ -621,6 +659,7 @@ static int f_brick_func_set_alt(struct usb_function *f, unsigned intf, unsigned 
 	struct f_brick_ctx *ctx = _f_brick_ctx;
 	int ret;
 	unsigned long flags;
+	struct usb_request *tx_probe;
 
 	/* enable in endpoint */
 	ret = f_brick_enable_endpoint(ctx->ep_in, f);
@@ -642,10 +681,45 @@ static int f_brick_func_set_alt(struct usb_function *f, unsigned intf, unsigned 
 
 	f_brick_reset_requests();
 
-	/* wake waiting writer */
-	f_brick_set_state(F_BRICK_STATE_USB_CONNECTED);
+	/* queue probe request to figure out when the USB host is ready to receive
+	 * data. this is a workaround for the problem with the first request being
+	 * mangled. typically the first request send to the USB host is the 34 byte
+	 * enumerate callback for the RED Brick itself. the first 12 bytes of this
+	 * request get overwritten by [A1 20 00 00 01 00 02 00 03 00 02 00] if they
+	 * are queued to the endpoint too early. directly before the data is written
+	 * to the endpoint FIFO it is still correct, but the USB host receives it
+	 * mangled. this doesn't seem to be a host side problem as it happens with
+	 * Linux and Windows hosts.
+	 *
+	 * the callstack is:
+	 *
+	 * usb_ep_queue
+	 * sw_udc_queue
+	 * sw_udc_write_fifo
+	 * pio_write_fifo
+	 * sw_udc_write_packet
+	 * USBC_WritePacket
+	 *
+	 * to workaround this send a 1 byte request. it doesn't matter if this one
+	 * gets mangled because it contains no relevant data. brickd on the USB
+	 * host side can filter it out by its length alone. */
+	tx_probe = ctx->tx_probe;
+	ctx->tx_probe = NULL;
 
 	spin_unlock_irqrestore(&ctx->lock, flags);
+
+	if (tx_probe) {
+		*(uint8_t *)tx_probe->buf = 170; // 0b10101010
+		tx_probe->length = 1;
+
+		ret = usb_ep_queue(ctx->ep_in, tx_probe, GFP_ATOMIC);
+
+		if (ret < 0) {
+			ctx->tx_probe = tx_probe;
+
+			printk("f_brick_func_set_alt: tx_probe usb_ep_queue failed: %d\n", ret);
+		}
+	}
 
 	return 0;
 }
