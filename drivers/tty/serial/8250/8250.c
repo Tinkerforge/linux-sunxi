@@ -57,14 +57,14 @@ void deassert_rts_uart8250(struct uart_8250_port *);
 void assert_rts_uart(struct uart_port *up)
 {
     unsigned int mctrl = up->mctrl;
-    mctrl |= TIOCM_RTS;
+    mctrl &= ~TIOCM_RTS;
     serial8250_set_mctrl(up, mctrl);
 }
 
 void deassert_rts_uart(struct uart_port *up)
 {
     unsigned int mctrl = up->mctrl;
-    mctrl &= ~TIOCM_RTS;
+    mctrl |= TIOCM_RTS;
     serial8250_set_mctrl(up, mctrl);
 }
 
@@ -72,7 +72,7 @@ void assert_rts_uart8250(struct uart_8250_port *up8250)
 {
     struct uart_port *up = &up8250->port;
     unsigned int mctrl = up->mctrl;
-    mctrl |= TIOCM_RTS;
+    mctrl &= ~TIOCM_RTS;
     serial8250_set_mctrl(up, mctrl);
 }
 
@@ -80,7 +80,7 @@ void deassert_rts_uart8250(struct uart_8250_port *up8250)
 {
     struct uart_port *up = &up8250->port;
     unsigned int mctrl = up->mctrl;
-    mctrl &= ~TIOCM_RTS;
+    mctrl |= TIOCM_RTS;
     serial8250_set_mctrl(up, mctrl);
 }
 
