@@ -1,0 +1,27 @@
+#
+# Wiznet device configuration
+#
+
+config NET_VENDOR_WIZNET
+	bool "Wiznet devices"
+	default y
+	depends on SPI
+	---help---
+	  If you have a network (Ethernet) card belonging to this class, say Y
+	  and read the Ethernet-HOWTO, available from
+	  <http://www.tldp.org/docs.html#howto>.
+
+	  Note that the answer to this question doesn't directly affect the
+	  kernel: saying N will just cause the configurator to skip all
+	  the questions about Micrel devices. If you say Y, you will be asked
+	  for your specific card in the following questions.
+
+if NET_VENDOR_WIZNET
+
+config W5X00
+	tristate "W5X00 Ethernet support for RED Brick"
+	---help---
+	  If you wish to compile for a RED Brick and want to
+	  use an Ethernet Extensionthen you should answer Y to this.
+
+endif # NET_VENDOR_WIZNET
