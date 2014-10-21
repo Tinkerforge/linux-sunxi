@@ -1754,13 +1754,8 @@ static struct platform_device sunxi_spi0_device = {
 };
 
 struct sunxi_spi_platform_data sunxi_spi1_pdata = {
-#if defined CONFIG_ARCH_SUN4I
 	.cs_bitmap	= 0x3,
 	.num_cs		= 2,
-#elif defined CONFIG_ARCH_SUN5I
-	.cs_bitmap	= 0x1,
-	.num_cs		= 1,
-#endif
 	.clk_name = "ahb_spi1",
 };
 static struct resource sunxi_spi1_resources[] = {
