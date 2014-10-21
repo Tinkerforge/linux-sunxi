@@ -367,7 +367,7 @@ wiznet_drv_create(wiz_t *wz)
 	dev->watchdog_timeo	= 2 * HZ;
 	
 	/* override Name */
-	strcpy(dev->name, "wiz%d");
+	strcpy(dev->name, "tf%d");
 
 	/* register driver */
 	if (register_netdev(dev)) {
