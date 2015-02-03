@@ -53,7 +53,7 @@ static __s32 hdmi_wait_edid(void)
 {
 	unsigned long start = jiffies;
 
-	while (time_before(jiffies, start + 10 * HZ)) { /* Wait max 10 sec */
+	while (time_before(jiffies, start + 1 * HZ)) { /* Wait max 1 sec */
 		if (hdmi_state > HDMI_State_EDID_Parse) {
 			pr_info("waited %ld ms for EDID info\n",
 				(jiffies - start) * 1000 / HZ);
