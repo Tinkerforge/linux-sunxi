@@ -1304,6 +1304,9 @@ __u32 tv_mode_to_width(__disp_tv_mode_t mode)
 	case DISP_TV_MOD_H1360_V768_60HZ:
 		width = 1360;
 		break;
+	case DISP_TV_MOD_H800_V480_60HZ:
+		width = 800;
+		break;
 	case DISP_TV_MOD_1080I_50HZ:
 	case DISP_TV_MOD_1080I_60HZ:
 	case DISP_TV_MOD_1080P_24HZ:
@@ -1356,6 +1359,9 @@ __u32 tv_mode_to_height(__disp_tv_mode_t mode)
 		break;
 	case DISP_TV_MOD_H1280_V1024_60HZ:
 		height = 1024;
+		break;
+    case DISP_TV_MOD_H800_V480_60HZ:
+		height = 480;
 		break;
 	case DISP_TV_MOD_1080I_50HZ:
 	case DISP_TV_MOD_1080I_60HZ:
